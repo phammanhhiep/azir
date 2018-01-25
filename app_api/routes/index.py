@@ -1,14 +1,13 @@
-'''
-Define routes
-'''
+import app_api.controllers.retrieve as retrieveCtrl 
+import app_api.controllers.index as indexCtrl
 
-from flask import request
-
-import app_api.controllers.search as searchCtrl 
-
-def route (app):
+def route (app, irsys):
 	@app.route ('/api/search', methods=['GET'])
-	def search ():
-		return searchCtrl.search (request)
+	def retrieve ():
+		return retrieveCtrl.retrieve (irsys)
+
+	@app.route ('/api/index', methods=['POST'])
+	def index ():
+		return indexCtrl.index (irsys)	
 
 

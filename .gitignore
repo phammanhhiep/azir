@@ -3,3 +3,5 @@ venv/
 dev_data/
 
 __pycache__
+
+.cache
