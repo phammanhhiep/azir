@@ -3,6 +3,7 @@ sys.path.insert (0, os.path.abspath ('./'))
 from app_ir.indexing.indexing import Indexing, BSBIndexing, SPIMIndexing
 
 import pytest, pymongo
+from collections import defaultdict
 from bson.objectid import ObjectId
 
 @pytest.mark.indexingTest
@@ -68,24 +69,237 @@ def test__index ():
 				assert k[m] == t[m]
 
 @pytest.mark.indexingTest
-# @pytest.mark.skip
-def test__update_indexes (): pass
+@pytest.mark.skip
+def test__update_indexes ():
+	index = [
+		[0, [[0, 2, 0, 3]]], 
+		[1, [[0, 1, 1], [1, 2, 0, 1]]],
+		[2, [[0,1,2], [1, 2, 2, 3]]], 
+		[3, [[0,1,4], [1,1,4]]]
+	]
+
+	b = Indexing ('test')
+	try:
+		b.update_indexes (index)
+		fetched_index = b.fetch_indexes ([0,1,2,3])
+		fetched_index = b._to_list_indexes (fetched_index)
+		assert len (fetched_index) == len (index)
+		for j in range (4):
+			i = fetched_index[j]
+			ei = index[j]
+			assert i[0] == ei[0]
+			assert len (i[1]) == len (ei[1])
+			for k,t in zip (i[1], ei[1]):
+				assert len (k) == len (t)
+				for m in range (len (k)):
+					assert k[m] == t[m]
+
+	except Exception as ex:
+		print (ex)
+		b.index_coll.drop ()
+		assert False
+	else:
+		b.index_coll.drop ()
 
 @pytest.mark.indexingTest
-# @pytest.mark.skip
-def test__index_new_docs (): pass
+@pytest.mark.skip
+def test__index_new_docs ():
+	collection = [
+		[0, [['xx', 'yy', 'zz'],['xx', 'tt']]],
+		[1, [['yy', 'yy', 'zz'],['zz', 'tt']]],	
+	]
+
+	b = Indexing ('test')
+	index = b._index_new_docs (collection)
+
+	expected_index = [
+		[0, [[0, 2, 0, 3]]], [1, [[0, 1, 1], [1, 2, 0, 1]]],
+		[2, [[0,1,2], [1, 2, 2, 3]]], [3, [[0,1,4], [1,1,4]]]
+	]
+	assert len (index) == len (expected_index)
+	for j in range (4):
+		i = index[j]
+		ei = expected_index[j]
+		assert i[0] == ei[0]
+		assert len (i[1]) == len (ei[1])
+		for k,t in zip (i[1], ei[1]):
+			assert len (k) == len (t)
+			for m in range (len (k)):
+				assert k[m] == t[m]	
 
 @pytest.mark.indexingTest
-# @pytest.mark.skip
-def test__inverse_left_join_postings_lists (): pass
+@pytest.mark.skip
+def test__left_join_postings_lists ():
+	# test if 
+	pl = [[0, 1, 1], [3, 2, 0, 1]]
+	target_pl = [[0,2,4,5], [2,1,10]]
+	b = Indexing ('test')
+	pl = b._left_join_postings_lists (pl, target_pl)
+	expected_pl = [[0, 1, 1], [2,1,10], [3, 2, 0, 1]]
+
+	assert len (pl) == len (expected_pl)
+	for k,m in zip (pl, expected_pl):
+		assert len (k) == len (m)
+		for t,n in zip (k,m):
+			assert t == n
 
 @pytest.mark.indexingTest
-# @pytest.mark.skip
-def test__merge_indexes (): pass
+@pytest.mark.skip
+def test__merge_indexes ():
+	# Test cache indexes contains posting lists of docs that edited index does not have
+	# Test cache indexes contains terms that edited index does not have
+	# Test new indexes contains new terms.
+	# Test next indexes contains existing terms.
+
+	new_indexes = [
+		[0, [[10, 2, 0, 3]]], 
+		[1, [[11, 1, 1], [12, 2, 0, 1]]],
+		[2, [[10,1,2], [12, 2, 2, 3]]], 
+		[3, [[10,1,4], [13,1,4]]],
+		[10, [[10,1,5], [13,1,5]]],
+	]
+
+	edited_indexes = [
+		[0, [[0, 2, 0, 3]]], 
+		[1, [[0, 1, 1], [1, 2, 0, 1]]],
+		[2, [[0,1,2], [1, 2, 2, 3]]], 
+		[3, [[0,1,4], [1,1,4]]]
+	]
+
+	cache_indexes = {
+		1: [[0, 1, 6], [1, 2, 0, 20], [3, 1, 10]], 
+		5: [[0, 1, 16]]
+	}
+	cache_indexes = defaultdict (lambda: None, cache_indexes)
+
+	disk_indexes = [
+		[0, [[0, 3, 10, 19]]], 
+		[1, [[0, 1, 6], [1, 2, 0, 20]]],
+		[2, [[0,1,5], [1, 2, 2, 7]]], 
+		[3, [[0,1,4], [1,1,4]]], 
+		[5, [[0, 1, 16]]]
+	]
+ 		
+	expected_index = [
+		[0, [[0, 2, 0, 3], [10, 2, 0, 3]]], 
+		[1, [[0, 1, 1], [1, 2, 0, 1], [3, 1, 10], [11, 1, 1], [12, 2, 0, 1]]],
+		[2, [[0,1,2], [1, 2, 2, 3],[10,1,2], [12, 2, 2, 3]]], 
+		[3, [[0,1,4], [1,1,4],[10,1,4], [13,1,4]]],
+		[10, [[10,1,5], [13,1,5]]]
+	]
+
+	b = Indexing ('test')
+	b.save_indexes (disk_indexes)
+	b._indexes = cache_indexes
+
+	try:
+		merged_indexes = b._merge_indexes (new_indexes, edited_indexes)
+		assert len (merged_indexes) == len (expected_index)
+		for j in range (len (merged_indexes)):
+			i = merged_indexes[j]
+			ei = expected_index[j]
+			assert i[0] == ei[0]
+			assert len (i[1]) == len (ei[1])
+			for k,t in zip (i[1], ei[1]):
+				assert len (k) == len (t)
+				for m in range (len (k)):
+					assert k[m] == t[m]
+
+	except Exception as ex:
+		print (ex)
+		b.index_coll.drop ()
+		assert False
+	else:
+		b.index_coll.drop ()	
 
 @pytest.mark.indexingTest
-# @pytest.mark.skip
-def test_index (): pass
+@pytest.mark.skip
+def test_index ():
+	collection = [
+		[0, [['xx', 'yy', 'zz'],['xx', 'tt']], 1],
+		[10, [['yy', 'yy', 'zz'],['zz', 'tt', 'kk']], 0],	
+	]
+
+	vocabulary = [		
+		{'term': 'xx', 'termid': 0, 'df': 1},
+		{'term': 'yy', 'termid': 1, 'df': 2},
+		{'term': 'zz', 'termid': 2, 'df': 2},
+		{'term': 'tt', 'termid': 3, 'df': 2},
+		{'term': 'nn', 'termid': 4, 'df': 1},
+		{'term': 'mm', 'termid': 5, 'df': 1}
+	]
+
+	disk_indexes = [
+		[0, [[0,3,10,19]]], 
+		[1, [[0,1,6], [1,2,0,20], [3,1,10]]],
+		[2, [[0,1,5], [1,2,2,7]]], 
+		[3, [[0,1,4], [1,1,4]]], 
+		[4, [[0, 1, 16]]],
+		[5, [[0, 1, 17]]],
+	]
+
+	cache_indexes = {
+		1: [[0, 1, 6], [1, 2, 0, 20],[3,1,10]], 
+		5: [[0, 1, 16]]
+	}
+	cache_indexes = defaultdict (lambda: None, cache_indexes) 
+
+	expected_index = [
+		[0, [[0,2,0,3]]], 
+		[1, [[0,1,1], [1,2,0,20], [3,1,10], [10,2,0,1]]],
+		[2, [[0,1,2], [1,2,2,7], [10,2,2,3]]], 
+		[3, [[0,1,4], [1,1,4], [10,1,4]]],
+		[4, [[0, 1, 16]]],
+		[5, [[0, 1, 17]]],
+		[6, [[10,1,5]]]
+	]
+
+	exp_vocabulary = {
+		'xx':  {'termid': 0, 'df': 2},
+		'yy': {'termid': 1, 'df': 4},
+		'zz': {'termid': 2, 'df': 4},
+		'tt': {'termid': 3, 'df': 4},
+		'nn': {'termid': 4, 'df': 1},
+		'mm': {'termid': 5, 'df': 1},
+		'kk': {'termid': 6, 'df': 1},
+	}
+
+	b = Indexing ('test')
+	b.vocabulary_coll.insert_many (vocabulary)
+	b._create_vocabulary_cache ()
+	b.save_indexes (disk_indexes)
+	b._indexes = cache_indexes
+	
+	try:
+		b.index (collection)
+		_vocabulary = b.get_vocabulary ()
+		assert len (_vocabulary) == len (exp_vocabulary)
+		for k,v in _vocabulary.items ():
+			assert v['termid'] == exp_vocabulary[k]['termid']
+			assert v['df'] == exp_vocabulary[k]['df']
+
+		fetched_index = b.fetch_indexes ([0,1,2,3,4,5,6])
+		fetched_index = b._to_list_indexes (fetched_index)
+		
+		assert len (fetched_index) == len (expected_index)
+		for j in range (len (fetched_index)):
+			i = fetched_index[j]
+			ei = expected_index[j]
+			assert i[0] == ei[0]
+			assert len (i[1]) == len (ei[1])
+			for k,t in zip (i[1], ei[1]):
+				assert len (k) == len (t)
+				for m in range (len (k)):
+					assert k[m] == t[m]
+
+	except Exception as ex:
+		print (ex)
+		b.vocabulary_coll.drop ()
+		b.index_coll.drop ()
+		assert False
+	else:
+		b.vocabulary_coll.drop ()
+		b.index_coll.drop ()		
 
 @pytest.mark.bsbindexingTest
 @pytest.mark.skip
@@ -207,56 +421,4 @@ def test_create_index ():
 	b.index_coll.drop ()
 	b.vocabulary_coll.drop ()
 
-@pytest.mark.bsbindexingTest
-@pytest.mark.skip
-def test__fetch_index_by_termid (): pass
-
-@pytest.mark.bsbindexingTest
-@pytest.mark.skip
-def test__index_new_docs ():
-	collection = [
-		[0, [['xx', 'yy', 'zz'],['xx', 'tt']]],
-		[1, [['yy', 'yy', 'zz'],['zz', 'tt']]],	
-	]
-
-	disk_index = [
-		{'termid': 1, 'pl': [[9, 1, 1], [7,1,1]]},
-		{'termid': 20, 'pl': [[8, 1, 1]]},
-	]
-
-	try:
-		b = BSBIndexing ('test')
-		b._cache_index = {
-			0: [[2, 1, 10]],
-			10: [[12, 1, 10]],
-		}		
-
-		b.index_coll.insert_many (disk_index)
-		index = b._index_new_docs (collection)
-		expected_index = [
-			[0, [[0, 2, 0, 3], [2, 1, 10]]], [1, [[0, 1, 1], [1, 2, 0, 1], [7,1,1], [9, 1, 1]]],
-			[2, [[0,1,2], [1, 2, 2, 3]]], [3, [[0,1,4], [1,1,4]]]
-		]
-
-		assert len (index) == len (expected_index)
-		for j in range (4):
-			i = index[j]
-			ei = expected_index[j]
-			assert i[0] == ei[0]
-			assert len (i[1]) == len (ei[1])
-			for k,t in zip (i[1], ei[1]):
-				assert len (k) == len (t)
-				for m in range (len (k)):
-					assert k[m] == t[m]		
-
-	except Exception as ex:
-		print (ex)
-		b.index_coll.drop ()
-		assert False
-	else:
-		b.index_coll.drop ()
-
-@pytest.mark.bsbindexingTest
-@pytest.mark.skip
-def test_ (): pass
 
