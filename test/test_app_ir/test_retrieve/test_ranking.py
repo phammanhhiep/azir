@@ -1,6 +1,6 @@
 import os, sys
 sys.path.insert (0, os.path.abspath ('./'))
-from app_ir.retrieve.ranking import Ranking, WeightedZoneScoring, TermFrequencyScoring, TFIDFScoring
+from app_ir.retrieve.ranking import Ranking, WeightedZoneScoring, TermFrequencyScoring, TFIDFScoring, CosineScoring
 import math
 
 import pytest
@@ -57,7 +57,7 @@ def test_tf_score ():
 			assert c == d	
 
 @pytest.mark.tfidfTesting
-# @pytest.mark.skip
+@pytest.mark.skip
 def test_tfidf_score ():
 	def idf (df,N):
 		return math.log (N/df, 10)
@@ -84,5 +84,32 @@ def test_tfidf_score ():
 			assert c == d
 
 
+@pytest.mark.cosineScoringTesting
+# @pytest.mark.skip
+def test_cosine_score ():
+	def idf (df,N):
+		return math.log (N/df, 10)
+
+	pl = [
+		[None, (100, None, (20,1), (11,1), (20,1), (4,2))],
+		[0, (100, 20, (20,0), (11,15), (20,0), (4,1))], 
+		[2, (100, 10, (20,1), (11,0), (20,0), (4,20))],
+		[4, (100, 100, (20,0), (11,0), (20,5), (4,7))],
+	]
+
+	expected_scores = [
+		[2, ((1 * 1 * idf(20,100)* idf(20,100)) + 0 + 0 + (2 * 20 * idf(4,100)* idf(4,100))) / 10],
+		[0, (0 + (15 * 1 * idf(11,100) * idf(11,100)) + 0 + (1 * 2 * idf(4,100) * idf(4,100))) / 20],
+		[4, (0 + 0 + ( 1 * 5 * idf(20,100)* idf(20,100)) + (2 * 7 * idf(4,100)* idf(4,100))) / 100],
+	]
+
+	t = CosineScoring ()
+	scores = t.score (pl)
+
+	assert len (scores) == len (expected_scores)
+	for a,b in zip (expected_scores, scores):
+		len (a) == len (b)
+		for c,d in zip (a,b):
+			assert c == d
 
 

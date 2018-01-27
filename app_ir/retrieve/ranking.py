@@ -3,7 +3,9 @@ import math
 
 class Ranking: 
 	'''
-	The class have different implementation for scoring documents. However, all assumes the web search query. In other words, assume each term in a query is joined with another by an AND operator. 
+	The class have different implementation for scoring documents. However, all 
+	assumes the web search query. In other words, assume each term in a query is 
+	joined with another by an AND operator. 
 	'''
 
 	def __init__ (self, indexing=None, algorithm=None, algorithm_name='weightedZoneScore', training_data=None):
@@ -184,7 +186,7 @@ class TFIDFScoring (Scoring):
 	def score (self, postings_lists):
 		'''
 		Calculate the score for each document in the postings_lists.
-		The format of postings_lists is [[docid, [doc_total, total, tf, tf, ...]]]
+		The format of postings_lists is [[docid, (df_total, (df, tf), (df, tf))], ...]
 
 		::param postings_lists:: 
 		'''
@@ -215,3 +217,77 @@ class TFIDFScoring (Scoring):
 
 	@classmethod
 	def train (cls): pass
+
+class CosineScoring (Scoring):
+	def __init__ (self, weights=None):
+		Scoring.__init__ (self, weights)
+		self._setup_contants ()
+
+	def _setup_contants (self):
+		self.POSTING_LISTS = {
+			'QUERY': 0,
+			'DOC_LIST': 1,
+			'DOCID': 0,
+			'TF_LIST': 1,
+			'DF_TOTAL': 0,
+			'DVECTOR_LEN': 1,
+			'TFDF': 2,
+			'DF': 0,
+			'TF': 1,
+		}
+
+		self.SCORE_LISTS = {
+			'DOCID': 0,
+			'SCORE': 1,
+		}
+	
+	def score (self, postings_lists):
+		'''
+		
+		::param postings_lists:: posting_lists has format as follow, 
+			[[docid, (df_total, (df, tf), (df, tf))], ...]. 
+			The first element of the list is data of the query, and thus has docid as None.
+			The number of tuples for each list must be the same, since they 
+			represent a common vector space.
+		'''	
+
+		def _tfidf (df_total, df, tf, base=10):
+			return tf * math.log (df_total / df, base)
+
+		SCORE = self.SCORE_LISTS['SCORE']
+		QUERY = self.POSTING_LISTS['QUERY']
+		DOC_LIST = self.POSTING_LISTS['DOC_LIST']
+		DOCID = self.POSTING_LISTS['DOCID']
+		TF_LIST = self.POSTING_LISTS['TF_LIST']
+		DF_TOTAL = self.POSTING_LISTS['DF_TOTAL']
+		DVECTOR_LEN = self.POSTING_LISTS['DVECTOR_LEN']
+		TFDF = self.POSTING_LISTS['TFDF']
+		DF = self.POSTING_LISTS['DF']
+		TF = self.POSTING_LISTS['TF']
+		scores = []
+		query_pl = postings_lists[QUERY]
+		query_tf_list = query_pl[TF_LIST]
+		query_tfdf = query_tf_list[TFDF:]
+		df_total = query_tf_list[DF_TOTAL]
+		doc_pls = postings_lists[DOC_LIST:]
+
+		query_weights = [_tfidf (df_total, df, tf) for (df,tf) in query_tfdf]
+
+		for pl in doc_pls:
+			docid = pl[DOCID]
+			tf_list = pl[TF_LIST] 
+			dvlen = tf_list[DVECTOR_LEN]
+			tfdf = tf_list[TFDF:]
+			scores.append ([docid, 0])
+			weights = []
+			for df,tf in tfdf:
+				weights.append (_tfidf (df_total, df, tf))
+
+			scores[-1][SCORE] = sum ([a * b for (a,b) in zip (weights, query_weights)]) / dvlen
+
+		scores = sorted (scores, key=lambda x: x[SCORE], reverse=True)
+		
+		return scores	
+
+	@classmethod
+	def train (cls): pass		
