@@ -280,7 +280,7 @@ def test_index ():
 
 		fetched_index = b.fetch_indexes ([0,1,2,3,4,5,6])
 		fetched_index = b._to_list_indexes (fetched_index)
-		
+
 		assert len (fetched_index) == len (expected_index)
 		for j in range (len (fetched_index)):
 			i = fetched_index[j]
@@ -369,56 +369,5 @@ def test__merge_blocks ():
 		assert False
 	else:
 		b.index_coll.drop ()		
-
-@pytest.mark.bsbindexingTest
-@pytest.mark.skip
-# RETEST after complete the update index method.
-def test_create_index ():
-	collection = [
-		[0, [['xx', 'yy', 'zz'],['xx', 'tt']]],
-		[1, [['yy', 'yy', 'zz'],['zz', 'tt']]],	
-	]
-
-	b = BSBIndexing ('test')
-	b.create_index (collection, bsize_max=1)
-
-	expected_vocabulary = [
-		{'term': 'xx', 'termid': 0, 'df': 1},
-		{'term': 'yy', 'termid': 1, 'df': 2},
-		{'term': 'zz', 'termid': 2, 'df': 2},
-		{'term': 'tt', 'termid': 3, 'df': 2},
-	];
-
-	expected_index = [
-		{'termid': 0, 'pl': [[0, 2, 0, 3]]},
-		{'termid': 1, 'pl': [[0, 1, 1], [1, 2, 0,1]]},
-		{'termid': 2, 'pl': [[0, 1, 2], [1, 2, 2, 3]]},
-		{'termid': 3, 'pl': [[0, 1, 4], [1, 1, 4]]},
-	]
-
-	vocabulary = list (b.vocabulary_coll.find ().sort ('termid', 1))
-	assert len (vocabulary) == len (expected_vocabulary)
-	for i in range (len (vocabulary)):
-		v = vocabulary[i]
-		ev = expected_vocabulary[i]
-		assert v['term'] == ev['term']
-		assert v['termid'] == ev['termid']
-		assert v['df'] == ev['df']
-
-	index = list (b.index_coll.find ().sort ('termid', 1))
-
-	assert len (index) == len (expected_index)
-	for j in range (len (index)):
-		i = index[j]
-		ei = expected_index[j]
-		assert i['termid'] == ei['termid']
-		assert len (i['pl']) == len (ei['pl'])
-		for k,t in zip (i['pl'], ei['pl']):
-			assert len (k) == len (t)
-			for z in range (len (k)):
-				assert k[z] == t[z]	
-
-	b.index_coll.drop ()
-	b.vocabulary_coll.drop ()
 
 

@@ -22,7 +22,6 @@ class IRSYS:
 		self.dbname = dbname
 		self.doc_coll_name = doc_coll_name
 		self._create_queue ()
-		self._create_cache ()
 		self.indexing = Indexing (dbname=dbname, vocabulary_coll_name=vocabulary_coll_name, index_coll_name=index_coll_name)
 		self.retrieval = Retrieval ()
 		self.index ()
@@ -53,7 +52,7 @@ class IRSYS:
 		'''
 		Check conditions to process docid in the queues.
 		Filter the queue if the doc has one instance in the queue and update appropriate state. For example, it was created but not being indexed yet, and now it is edited. In another case, it is created but not indexed, but now being deleted. First case will keep the edited version, but now the document is considered as a new document since it has nevered been index. The later require just ignore the document.
-		
+
 		::param doc:: the new doc about being indexed. 
 		::return:: True if ready to add or else False
 		'''

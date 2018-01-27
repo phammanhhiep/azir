@@ -4,12 +4,12 @@ Index construction.
 
 import os,sys
 sys.path.insert (0, os.path.abspath ('./'))
-from app_ir.compress.compression import Compression
 from app_ir.preprocess.preprocess import Preprocessing
-from app_ir.preprocess.stem import Stem
-from app_ir.preprocess.word_tokenize import WordTokenize
-from app_ir.preprocess.sent_tokenize import SentTokenize
-from app_ir.preprocess.spell_correct import SpellCorrection
+from app_ir.compress.compression import Compression
+# from app_ir.preprocess.stem import Stem
+# from app_ir.preprocess.word_tokenize import WordTokenize
+# from app_ir.preprocess.sent_tokenize import SentTokenize
+# from app_ir.preprocess.spell_correct import SpellCorrection
 
 from collections import defaultdict
 import pymongo
@@ -23,7 +23,7 @@ class Indexing:
 
 	'''
 
-	def __init__ (self, dbname='market', vocabulary_coll_name='vocabularies', index_coll_name='indexes', max_update_termid=100):
+	def __init__ (self, dbname='market', vocabulary_coll_name='vocabularies', index_coll_name='indexes', max_update_termid=100, preprocessing=Preprocessing):
 		'''
 		Functionality:
 			+ Create and update indexes
@@ -35,6 +35,7 @@ class Indexing:
 		self.db = pymongo.MongoClient ()[dbname]
 		self.vocabulary_coll = self.db[vocabulary_coll_name]
 		self.index_coll = self.db[index_coll_name]
+		self.preprocessing = preprocessing
 		self.max_update_termid = max_update_termid
 		self.create_cache ()
 		self.setup_constants ()
@@ -114,6 +115,9 @@ class Indexing:
 		return [{'termid': i[TERMID], 'pl': i[POSTINGLIST]} for i in index]
 
 	def get_indexes (self):
+		'''
+		Get the cached indexes
+		'''
 		return self._indexes	
 
 	def get_vocabulary (self):
@@ -413,14 +417,18 @@ class Indexing:
 		Most external use of the class is carried through the method. 
 		Create or update indexes.
 		Assume that no document is duplicated, which means no two document have the same docid.
-
-		::param collection:: a list of [docid, doc states, doc content]
+		
+		::param collection:: a list of [docid, doc states, doc content]. If not being preprocessing, must provide preprocessing when init the object.
 		::param save:: True means to build and save index to disk. Otherwise, just return the index without saving to disk.
 		'''
 		STATE = self.COLLECTION['STATE']
+		DOC = self.COLLECTION['DOC']
+		DOCID = self.COLLECTION['DOCID']		
 		NEW_STATE = self.DOC_STATES ['NEW']
 		EDIT_STATE = self.DOC_STATES ['EDITED']
 		DELETE_STATE = self.DOC_STATES ['DELETED']
+
+		collection = [[d[DOCID], self.preprocessing.run (d[DOC]), d[STATE]] for d in collection]
 		new_docs = [d for d in collection if d[STATE] == NEW_STATE]
 		edited_docs = [d for d in collection if d[STATE] == EDIT_STATE]
 		deleted_docs = [d for d in collection if d[STATE] == DELETE_STATE]
@@ -529,8 +537,7 @@ class SPIMIndexing (Indexing): pass
 
 def bsbi_demo ():
 	collection = []
-	tokens = Preprocessing.preprocess (collection, Stem=Stem, SpellCorrection=SpellCorrection, SentTokenize=SentTokenize, WordTokenize=WordTokenize)
-
+	
 def spimi_demo (): pass
 
 if __name__ == '__main__': pass
