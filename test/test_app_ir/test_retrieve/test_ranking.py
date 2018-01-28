@@ -83,9 +83,8 @@ def test_tfidf_score ():
 		for c,d in zip (a,b):
 			assert c == d
 
-
 @pytest.mark.cosineScoringTesting
-# @pytest.mark.skip
+@pytest.mark.skip
 def test_cosine_score ():
 	def idf (df,N):
 		return math.log (N/df, 10)

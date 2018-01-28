@@ -8,13 +8,17 @@ class Ranking:
 	joined with another by an AND operator. 
 	'''
 
-	def __init__ (self, indexing=None, algorithm=None, algorithm_name='weightedZoneScore', training_data=None):
+	def __init__ (self, indexing=None, algorithm=None, algorithm_name='cs', training_data=None):
 		self.indexing = indexing
 		self._create_cache ()
 		self._setup_contants ()
 		if algorithm is None:
-			if algorithm_name == 'weightedZoneScore':
+			if algorithm_name == 'cs':
+				self._algorithm = CosineScoring ()
+			elif algorithm_name == 'wzs':
 				self._algorithm = WeightedZoneScoring.train (training_data)
+			elif algorithm_name == 'tfidf':
+				self._algorithm = TFIDFScoring ()
 		else:
 			self._algorithm = algorithm
 
@@ -26,10 +30,11 @@ class Ranking:
 		return self._algorithm
 
 	def score (self, postings_lists):
+		'''
+		Return scores of documents in decesdening order.
+		'''
 		score = self._algorithm.score (postings_lists)
 		return score
-
-	def rank (self, scores): pass
 
 class Scoring:
 	'''
@@ -245,7 +250,7 @@ class CosineScoring (Scoring):
 		'''
 		
 		::param postings_lists:: posting_lists has format as follow, 
-			[[docid, (df_total, (df, tf), (df, tf))], ...]. 
+			[[docid, (df_total, doc_vlen, (df, tf), (df, tf))], ...]. 
 			The first element of the list is data of the query, and thus has docid as None.
 			The number of tuples for each list must be the same, since they 
 			represent a common vector space.

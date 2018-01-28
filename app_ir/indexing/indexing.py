@@ -20,10 +20,9 @@ class Indexing:
 	FUTURE WORK:
 		+ Reconsider the index structures. Both structures being used may confusing sometimes.
 		+ Need to deal with words being deleted from an indexed documents. The current version only deal with document being deleted, new words, an existing word being added or move arround a given document.
-
 	'''
 
-	def __init__ (self, dbname='market', vocabulary_coll_name='vocabularies', index_coll_name='indexes', max_update_termid=100, preprocessing=Preprocessing):
+	def __init__ (self, dbname='market', vocabulary_coll_name='vocabularies', index_coll_name='indexes', doc_coll_name='content', max_update_termid=100, preprocessing=Preprocessing):
 		'''
 		Functionality:
 			+ Create and update indexes
@@ -35,6 +34,7 @@ class Indexing:
 		self.db = pymongo.MongoClient ()[dbname]
 		self.vocabulary_coll = self.db[vocabulary_coll_name]
 		self.index_coll = self.db[index_coll_name]
+		self.doc_coll = self.db[doc_coll_name]
 		self.preprocessing = preprocessing
 		self.max_update_termid = max_update_termid
 		self.create_cache ()
@@ -213,6 +213,8 @@ class Indexing:
 		for i in result:
 			indexes[i['termid']] = i['pl']
 		return indexes
+
+	def _save_parse (self, tokens): pass
 
 	def _parse (self, tokens, docIDs):
 		'''

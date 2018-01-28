@@ -1,6 +1,7 @@
 import os,sys
 sys.path.insert (0, os.path.abspath ('./'))
 import pymongo
+from collections import defaultdict
 
 class Retrieval:
 	'''
@@ -14,124 +15,194 @@ class Retrieval:
 	::param preprocessing:: an instance of class Preprocessing
 	'''
 
-	def __init__ (self, dbname='market',rank=None, preprocessing=None, indexing=None):
+	def __init__ (self, dbname='market', doc_coll_name='content', ranking=None, preprocessing=None, indexing=None):
+		if None in [ranking, preprocessing, indexing]:
+			raise ValueError ('Must provide ranking, preprocessing, and indexing')
 		self.db = pymongo.MongoClient ()[dbname]
+		self.doc_coll = self.db[doc_coll_name]
 		self.preprocessing = preprocessing
 		self.indexing = indexing
-		self.rank = rank
+		self.ranking = ranking
 		self._create_cache ()
 		self._setup_contants ()
 
-	def _setup_contants (sefl): pass
+	def _setup_contants (self):
+		self.POSTINGS_LIST = {
+			'DOCID': 0,
+			'TF': 1, 
+			'POSITIONS': 2,
+		}
 	
-	def _create_cache (self): pass	
+	def _create_cache (self):
+		self._count_docs ()	
 
-	def _fetch_postings_lists (self, tokens):
+	def _count_docs (self):
+		self.D = self.doc_coll.find ().count ()
+
+	def _fetch_indexes (self, tokens):
 		'''
 		Get the indexes of the tokens
 		'''
-		postings_lists = []
-		fetched_termids = []
+
 		tokens = list (set (tokens))
 		vocabulary = self.indexing.get_vocabulary ()
-		indexes = self.indexing.get_indexes ()
+		cached_indexes = self.indexing.get_indexes ()
 		termids = [vocabulary[t]['termid'] for t in tokens]
-		index_len = len (indexes)
-		
-		if index_len > 0:
+		indexes = []
+		fetched_termids = []		
+
+		if len (cached_indexes) > 0:
 			for t in termids:
-				temp_pl = indexes[t]
+				temp_pl = cached_indexes[t]
 				if temp_pl is not None:
-					postings_lists.append (temp_pl)
+					indexes.append ({'termid':t, 'pl':temp_pl})
 				else:
 					fetched_termids.append (t)
 		else:
 			fetched_termids = termids
 		
-		indexes = self.indexing.fetch_indexes (fetched_termids)
-		for termid, pl in indexes.items ():
-			postings_lists.append (pl)
+		disk_indexes = self.indexing.fetch_indexes (fetched_termids)
+		for termid, pl in disk_indexes.items ():
+			indexes.append ({'termid':termid, 'pl':pl})
 		
-		postings_lists = sorted (postings_lists, key=lambda x: len (x))
-		
-		return postings_lists
+		indexes = sorted (indexes, key=lambda x: len (x['pl']))
+		return indexes
 
-	def _merge_postings_lists (self, postings_lists, k=100):
+	def _fetch_docs (self, postings_lists): pass
+
+	def _match_docids (self, indexes):
 		'''
+		Find a list docids which is the intersection of sets of docids associated with documents contain the terms.
+		Assume that indexes has length being at least 2.
+		::return:: A list of docid
+		'''
+		num = len (indexes)
+		docids = set ([d[0] for d in indexes[0]['pl']])
+		for i in range (num-1):
+			next_pl = indexes[i+1]['pl']
+			next_docids = [d[0] for d in next_pl]
+			docids = docids.intersection (next_docids)
+		return docids
+
+	def _create_doc_indexes (self, indexes, matched_docids):
+		'''
+		From term indexes, create doc indexes, in which each element contain tuples of (term,position)
+
+		::return:: document indexes, whose structure is following,
+		{docid: [(termid, position),], }
+		'''
+
+		POSITIONS = self.POSTINGS_LIST['POSITIONS']
+		DOCID = self.POSTINGS_LIST['DOCID']
+		TF = self.POSTINGS_LIST['TF']
+		matched_indexes = []
+		doc_indexes = defaultdict (lambda: [],{})
+
+		for index in indexes: 
+			pls = index['pl']
+			matched_pls = [p for p in pls if p[DOCID] in matched_docids]
+			matched_indexes.append ({'termid': index['termid'], 'pl': matched_pls})	
+
+		for index in matched_indexes:
+			pls = index['pl']
+			termid = index['termid']
+			for pl in pls:
+				docid = pl[DOCID]
+				positions = pl[POSITIONS:]
+				tf = pl[TF]
+				[doc_indexes[docid].append ((termid, tf, p)) for p in positions]
+		return doc_indexes
+
+	def _merge_indexes (self, indexes, k=100):
+		'''
+		Merge indexes into postings list for each documents.
 		Assume the postings lists are sorted according to doc frequency.
 		Group the term positions into lists corresponding to each document.
 		Sort term postions according to the term positions values.
 		
-		For each of new position lists, process from left to right (low postion to high postion), obtain a lists of postions that meet the below requirements:
+		For each of new position lists, process from left to right (low postion to high postion),
+		obtain a lists of postions that meet the below requirements:
 			- Two consecutive term postions must be close to each other within k distance
-			- No term has two instances being place next to each other without any instance of other term being placed between them. <<< NOTICE: The condition should be used only if the system cannot tokenize words well enough, since it is possible to condition part of a term as an individual term and return misleading results. For example like "New York Times", with poor word tokenize tool, each is treated as individual word and without the condition, the relevance of results will be low. Once the confidence in word tokenization is high, should not enforce the condition. >>>
+			- No term has two instances being place next to each other without any instance 
+			of other term being placed between them. <<< NOTICE: The condition should be used 
+			only if the system cannot tokenize words well enough, since it is possible to 
+			condition part of a term as an individual term and return misleading results. 
+			For example like "New York Times", with poor word tokenize tool, each is treated 
+			as individual word and without the condition, the relevance of results will be low. 
+			Once the confidence in word tokenization is high, should not enforce the condition. >>>
 		
-		The result posting lists are ranked in descending order according to how many query token each document contains.	
+		The result posting lists are ranked in descending order according to how many 
+		query token each document contains.	
 		
 		FUTURE WORK:
-		- Consider to enfore another condition: the order of between the positions of two terms match with order of corresponding query terms. However, a user may enter keywords rather than a sentence, and thus the order may not so important. 
+		- Consider to enfore another condition: the order of between the positions of two 
+		terms match with order of corresponding query terms. However, a user may enter 
+		keywords rather than a sentence, and thus the order may not so important. 
 
 		::param postings lists:: a list of postings in the same form created by instance of class Indexing
 		::param k:: Max number of distanace between consecuitive term in query. Default is very large distance to ensure that such requirement is not enfored. 
-		::return:: postings lists that contain at least one of the terms in query and being sorted according to the number of term they contain.
+		::return:: postings lists for each valid document, whose structure as following,
+		[[docid, [(termid, tf), (termid, tf), ...], [position, ...]], ...]
 		'''	
-		docs = defaultdict (lambda: [], {})
-		merged_pl = []
-		plnum = len (postings_lists)
+		
+		DOCID = self.POSTINGS_LIST['DOCID']
+		POSITIONS = self.POSTINGS_LIST['POSITIONS']
+		TF = self.POSTINGS_LIST['TF']
+		TP_TERMID = 0 
+		TP_TF = 1
+		TP_POSITION = 2
+		results = []
+		plnum = len (indexes)
 		if plnum == 0: pass # no keywords found
 		elif plnum == 1: # only one keywords
-			merged_pl = [[d[0], d[1:], 0] for d in postings_lists[0]['did']]
+			index = indexes[0]
+			pls = index['pl']
+			termid = index['termid']
+			results = [[p[DOCID], (termid, p[TF]), p[POSITIONS:]] for p in pls]
 		else: # more than one keywords found
-			merged_docids = None
-			for i in range (plnum-1):
-				curpl = postings_lists[i]
-				nextpl = postings_lists[i+1]
-				curdocs = set ([d[0] for d in curpl['did']]) if merged_docids is None else set(merged_docids)
-				nextdocs = set ([d[0] for d in nextpl['did']])
-				merged_docids = list (curdocs.intersection (nextdocs))
-			
-			if len (merged_docids) == 0: # no doc contains all the terms
-				merged_pl = []
-			else: # the two terms occur in the some common docs
-				for pl in postings_lists: # remove docs that do not contain all terms
-					pl['did'] = [l for l in pl['did'] if l[0] in merged_docids]
+			matched_docids = self._match_docids (indexes)
+			if len (matched_docids) > 0: # the two terms occur in the some common docs
+				doc_indexes = self._create_doc_indexes (indexes, matched_docids)
+				for docid, term_positions in doc_indexes.items ():
+					term_positions = sorted (term_positions, key=lambda x: x[TP_POSITION])
+					num = len (term_positions)
+					matched_positions = set ()
+					term_tfs = set ()
+					for i in range (num-1):
+						cur_tp = term_positions[i]
+						next_tp = term_positions[i + 1]
+						cur_term_tf = cur_tp[:TP_POSITION]
+						next_term_tf = next_tp[:TP_POSITION]
+						cur_p = cur_tp[TP_POSITION]
+						next_p = next_tp[TP_POSITION]
+						offset = next_p - cur_p
 
-				for pl in postings_lists: # group termids according to docid
-					did_list = pl['did']
-					termid = pl['termid']
-					for d in did_list:
-						for l in d[1:]:
-							docs[d[0]].append ((termid, l))
-				
-				TERMID = 0; POSITION = 1;
-				for did, term_indexes in docs.items (): # keep term postions if meet requirements
-					term_indexes = sorted (term_indexes, key=lambda x: x[POSITION])
-					tnum = len (term_indexes)
-					selected_indexes = []
-					for i in range (tnum-1):
-						cur_term = term_indexes[i]
-						next_term = term_indexes[i + 1]
-						offset = next_term[POSITION] - cur_term[POSITION]
-						if cur_term[TERMID] == next_term[TERMID]: continue 
+						if cur_tp[TP_TERMID] == next_tp[TP_TERMID]: continue 
 						if offset <= k and offset > 0:
-							selected_indexes.extend ([cur_term, next_term])
-					if len (selected_indexes) > 0:
-						selected_indexes = list (set (selected_indexes))
-
-					selected_termids = [i[TERMID] for i in selected_indexes]
-					selected_tnum = len (list (set (selected_termids)))
-					selected_positions = sorted ([i[POSITION] for i in selected_indexes])
-					merged_pl.append ([did, selected_positions, selected_tnum])
-		if len (merged_pl):
-			merged_pl = sorted (merged_pl, key=lambda x: x[2], reverse=True)
-		return merged_pl
+							term_tfs.add (cur_term_tf)
+							term_tfs.add (next_term_tf)
+							matched_positions.add (cur_p)
+							matched_positions.add (next_p)
+					matched_positions = sorted (matched_positions)
+					term_tfs = sorted (term_tfs, key=lambda x: x[0]) # sorted by term. For testing.
+					results.append ([docid, term_tfs, matched_positions])
+		return results
 	
-	def _merge_postings_lists_with_parametric_indexes (self):
+	def _merge_parametric_indexes (self):
 		'''
 		Merge standard index with paramatric index if possible.
 		'''
 
-	def _fetch_docs (self, postings_lists): pass
+	def _augment_doc_vectors (self, doc_vectors):
+		'''
+		Add additional data for later steps, i.e. scoring and so on.
+		'''	
+		docids = [v[0] for v in doc_vectors]
+		vocabulary = self.indexing.get_vocabulary ()
+		for v in doc_vectors:
+			v.insert (1, self.D)
+			term_tfs = v[2]
+			v[2] = [ [vocabulary[t[0]]['df']] + list (t) for t in term_tfs]
 
 	def _rank (self, docs):
 		'''
@@ -143,9 +214,11 @@ class Retrieval:
 		The interface to combine all other method to retrieve the final results
 		'''
 		tokens = self.preprocessing.run ([query])[0][0]
-		postings_lists = self._fetch_postings_lists (tokens)
-		merged_postings_lists = self._merge_postings_lists (postings_lists)
-		docs = self._fetch_docs (merged_postings_lists)
+		indexes = self._fetch_indexes (tokens)
+		doc_vectors = self._merge_indexes (indexes)
+		self._augment_doc_vectors (doc_vectors)
+		scores = self.ranking.score (doc_vectors)
+		docs = self._fetch_docs (postings_lists)
 		docs = self._rank (docs)
 		return docs
 
