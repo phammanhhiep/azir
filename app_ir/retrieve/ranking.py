@@ -8,8 +8,7 @@ class Ranking:
 	joined with another by an AND operator. 
 	'''
 
-	def __init__ (self, indexing=None, algorithm=None, algorithm_name='cs', training_data=None):
-		self.indexing = indexing
+	def __init__ (self, algorithm=None, algorithm_name='cs', training_data=None):
 		self._create_cache ()
 		self._setup_contants ()
 		if algorithm is None:
@@ -29,11 +28,17 @@ class Ranking:
 	def get_algorithm (self):
 		return self._algorithm
 
-	def score (self, postings_lists):
+	def create_scoring_data (self, retrieval, postings_lists, query_tokens):
+		'''
+		Convert to correct form used by a score method.
+		'''
+		return self._algorithm.create_scoring_data (retrieval, postings_lists, query_tokens)	
+
+	def score (self, scoring_data):
 		'''
 		Return scores of documents in decesdening order.
 		'''
-		score = self._algorithm.score (postings_lists)
+		score = self._algorithm.score (scoring_data)
 		return score
 
 class Scoring:
@@ -176,8 +181,8 @@ class TFIDFScoring (Scoring):
 		self.POSTING_LISTS = {
 			'DOCID': 0,
 			'TF_LIST': 1,
-			'DF_TOTAL': 0,
-			'TFDF': 1,
+			'D': 0,
+			'DFTF': 1,
 			'DF': 0,
 			'TF': 1,
 		}
@@ -191,7 +196,7 @@ class TFIDFScoring (Scoring):
 	def score (self, postings_lists):
 		'''
 		Calculate the score for each document in the postings_lists.
-		The format of postings_lists is [[docid, (df_total, (df, tf), (df, tf))], ...]
+		The format of postings_lists is [[docid, (D, (df, tf), (df, tf))], ...]
 
 		::param postings_lists:: 
 		'''
@@ -199,8 +204,8 @@ class TFIDFScoring (Scoring):
 		SCORE = self.SCORE_LISTS['SCORE']
 		DOCID = self.POSTING_LISTS['DOCID']
 		TF_LIST = self.POSTING_LISTS['TF_LIST']
-		DF_TOTAL = self.POSTING_LISTS['DF_TOTAL']
-		TFDF = self.POSTING_LISTS['TFDF']
+		D = self.POSTING_LISTS['D']
+		DFTF = self.POSTING_LISTS['DFTF']
 		DF = self.POSTING_LISTS['DF']
 		TF = self.POSTING_LISTS['TF']
 		scores = []
@@ -208,12 +213,12 @@ class TFIDFScoring (Scoring):
 		for pl in postings_lists:
 			docid = pl[DOCID]
 			tf_list = pl[TF_LIST] 
-			df_total = tf_list[DF_TOTAL]
-			tfdf = tf_list[TFDF:]
+			D = tf_list[D]
+			dftf = tf_list[DFTF:]
 			scores.append ([docid, 0])
 			ascore = 0
-			for df,tf in tfdf:
-				ascore += (tf * math.log (df_total / df, 10))
+			for df,tf in dftf:
+				ascore += (tf * math.log (D / df, 10))
 			scores[-1][SCORE] = ascore
 
 		scores = sorted (scores, key=lambda x: x[SCORE], reverse=True)
@@ -234,9 +239,9 @@ class CosineScoring (Scoring):
 			'DOC_LIST': 1,
 			'DOCID': 0,
 			'TF_LIST': 1,
-			'DF_TOTAL': 0,
-			'DVECTOR_LEN': 1,
-			'TFDF': 2,
+			'D_TOTAL': 0,
+			'DOCV_LEN': 1,
+			'DFTF': 2,
 			'DF': 0,
 			'TF': 1,
 		}
@@ -245,50 +250,110 @@ class CosineScoring (Scoring):
 			'DOCID': 0,
 			'SCORE': 1,
 		}
-	
-	def score (self, postings_lists):
+
+	def _docv_len (self, docv, vocabulary, D):
+		'''
+		Calculate the document vector length given the vector.
+
+		::param docv:: a dictionary {docid: xxx, tf: [(termid, tf), (termid, tf), ...]}
+		'''
+		TERMID = 0
+		TF = 1
+		tfs = docv['tf']
+		weights = [self._tfidf (D, vocabulary[i[TERMID]]['df'], i[TF]) for i in tfs]
+		return math.sqrt (sum ([a**2 for a in weights]))
+
+	def create_scoring_data (self, retrieval, postings_lists, query_tokens):
+		'''
+		Query scoring data does not contain document vector length. An in the score function, the weight of each term in query vector is not normalized by the query vector length
+
+		::return:: [[docid, (D, docv_len, (df, tf), (df, tf))], ...].
+		'''	
+		PL_DOCID = 0 
+		PL_TF = 1
+		TF_TID = 0 # within tf of a postings list
+		TF_TF = 1
+		
+		D = retrieval.D	
+		doc_data = []
+		query_data = [None, D, None]
+		vocabulary = retrieval.indexing.get_vocabulary ()
+		query_count = defaultdict (lambda: {'df': None, 'tf': 0}, {})
+		terms = list (set (query_tokens))
+		termids = [vocabulary[t]['termid'] for t in terms]
+
+		for t in query_tokens:
+			query_count[t]['tf'] += 1
+
+		for t in terms:
+			df = vocabulary[t]['df']
+			tf = query_count[t]['tf']
+			query_data.append ((df, tf))
+
+		docids = [d[PL_DOCID] for d in postings_lists]
+		docvs = retrieval.indexing.get_doc_vector (docids)	
+		tf_lists = [d[PL_TF] for d in postings_lists]
+
+		for docid, tfs, docv in zip (docids, tf_lists, docvs):
+			docv_len = self._docv_len (docv, vocabulary, D)
+			doc_data.append ([docid, D, docv_len])
+			doc_termids = [tf[TF_TID] for tf in tfs]
+
+			for t,tid in zip (terms,termids):
+				if tid in doc_termids:
+					tindex = doc_termids.index (tid)
+					df = vocabulary[t]['df']
+					tf = tfs[tindex][TF_TF]
+					doc_data[-1].append ((df, tf))
+				else: 
+					doc_data[-1].append ((1, 0)) # df=1, tf=0
+
+		doc_data.insert (0, query_data)
+		return doc_data
+
+	def _tfidf (self, D, df, tf, base=10):
+		return tf * math.log (D / df, base)	
+
+	def score (self, scoring_data):
 		'''
 		
-		::param postings_lists:: posting_lists has format as follow, 
-			[[docid, (df_total, doc_vlen, (df, tf), (df, tf))], ...]. 
+		::param scoring_data:: posting_lists has format as follow, 
+			[[docid, (D, docv_len, (df, tf), (df, tf))], ...]. 
 			The first element of the list is data of the query, and thus has docid as None.
 			The number of tuples for each list must be the same, since they 
 			represent a common vector space.
 		'''	
-
-		def _tfidf (df_total, df, tf, base=10):
-			return tf * math.log (df_total / df, base)
 
 		SCORE = self.SCORE_LISTS['SCORE']
 		QUERY = self.POSTING_LISTS['QUERY']
 		DOC_LIST = self.POSTING_LISTS['DOC_LIST']
 		DOCID = self.POSTING_LISTS['DOCID']
 		TF_LIST = self.POSTING_LISTS['TF_LIST']
-		DF_TOTAL = self.POSTING_LISTS['DF_TOTAL']
-		DVECTOR_LEN = self.POSTING_LISTS['DVECTOR_LEN']
-		TFDF = self.POSTING_LISTS['TFDF']
+		D_TOTAL = self.POSTING_LISTS['D_TOTAL']
+		DOCV_LEN = self.POSTING_LISTS['DOCV_LEN']
+		DFTF = self.POSTING_LISTS['DFTF']
 		DF = self.POSTING_LISTS['DF']
 		TF = self.POSTING_LISTS['TF']
 		scores = []
-		query_pl = postings_lists[QUERY]
+		query_pl = scoring_data[QUERY]
 		query_tf_list = query_pl[TF_LIST]
-		query_tfdf = query_tf_list[TFDF:]
-		df_total = query_tf_list[DF_TOTAL]
-		doc_pls = postings_lists[DOC_LIST:]
+		query_tfdf = query_tf_list[DFTF:]
+		D = query_tf_list[D_TOTAL] # total document number
+		doc_pls = scoring_data[DOC_LIST:]
 
-		query_weights = [_tfidf (df_total, df, tf) for (df,tf) in query_tfdf]
+		query_weights = [self._tfidf (D, df, tf) for (df,tf) in query_tfdf]
 
 		for pl in doc_pls:
 			docid = pl[DOCID]
 			tf_list = pl[TF_LIST] 
-			dvlen = tf_list[DVECTOR_LEN]
-			tfdf = tf_list[TFDF:]
+			docv_len = tf_list[DOCV_LEN]
+			dftf = tf_list[DFTF:]
 			scores.append ([docid, 0])
 			weights = []
-			for df,tf in tfdf:
-				weights.append (_tfidf (df_total, df, tf))
+			for df,tf in dftf:
+				weights.append (self._tfidf (D, df, tf))
 
-			scores[-1][SCORE] = sum ([a * b for (a,b) in zip (weights, query_weights)]) / dvlen
+			scores[-1][SCORE] = sum ([a * b for (a,b) in zip (weights, query_weights)]) / docv_len
 
 		scores = sorted (scores, key=lambda x: x[SCORE], reverse=True)
 		

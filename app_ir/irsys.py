@@ -1,14 +1,15 @@
 import os,sys
 sys.path.insert (0,os.path.abspath ('./app_ir/'))
 
-from indexing.indexing import BSBIndexing as Indexing
+from indexing.indexing import Indexing
 from preprocess.preprocess import Preprocessing
 from retrieve.retrieval import Retrieval
+from retrieve.ranking import Ranking
 
 class IRSYS:
 	def __init__ (self, dbname='market', doc_dbname='market', doc_coll_name='contents', vocabulary_coll_name='vocabularies', index_coll_name='indexes', max_queue=100, max_delete_cache=100, max_update_wait_time=300, max_delete_wait_time=300):
 		'''
-		Set up parameters and update index from the last queue and cache.
+		Set up parameters and index documents from the last queue and cache.
 
 		::param max_queue:: max number of docids in the queue
 		::param max_delete_cache:: max number of docids in the cache
@@ -21,9 +22,11 @@ class IRSYS:
 		self.max_delete_wait_time = max_delete_wait_time
 		self.dbname = dbname
 		self.doc_coll_name = doc_coll_name
-		self._create_queue ()
-		self.indexing = Indexing (dbname=dbname, vocabulary_coll_name=vocabulary_coll_name, index_coll_name=index_coll_name)
-		self.retrieval = Retrieval ()
+		self._create_cache ()
+		self._indexing = Indexing (dbname=dbname)
+		self._ranking = Ranking ()
+		self._preprocessing = Preprocessing () 
+		self._retrieval = Retrieval (preprocessing=self._preprocessing, ranking=self._ranking, indexing=self._indexing)
 		self.index ()
 
 	def _create_cache (self):
@@ -33,6 +36,7 @@ class IRSYS:
 			+ delete cache
 		'''	
 		self._create_delete_cache ()
+		self._create_queue ()
 
 	def _create_delete_cache (self): 
 		'''
@@ -73,6 +77,15 @@ class IRSYS:
 		::param docs:: a dictionary, whose key is a docid, and value is its state 
 		::return:: a list of list each of which has format, [docid, state, content]
 		'''
+		DOCID = 0
+		STATE = 1
+		foundDocs = None
+		if docs:
+			docids = [d[DOCID] for d in docs]
+			states = [d[STATE] for d in docs]
+			foundDocs = self._retrieval.fetch_docs (docids)
+			[d.append (s) for s,d in zip (states, foundDocs)]
+		return foundDocs
 
 	def index (self, doc=None):
 		'''
@@ -82,19 +95,20 @@ class IRSYS:
 		'''
 		result = None
 		if doc is None:
-			old_docs = self.get_queue ()
-			old_docs = self._fetch_doc_content (old_docs)
+			last_docs = self.get_queue ()
+			last_collection = self._fetch_doc_content (last_docs)
 			self.reset_queue ()
-			result = self.indexing.index (old_docs)
+			result = self._indexing.index (last_collection)
 		else:
 			if self.check_queue (doc):
 				self.queue_add (doc)
+				result = {'status': 1, 'msg': 'OK'}
 			else:
-				old_docs = self._get_queue ()
-				old_docs = self._get_doc_content (old_docs)
+				last_docs = self._get_queue ()
+				last_collection = self._get_doc_content (last_docs)
+				result = self._indexing.index (last_collection)
 				self.reset_queue ()
-				self.queue_add (doc)
-				result = self.indexing.index (old_docs)
+				self.queue_add (doc)				
 		return result
 
 	def retrieve (self, query):

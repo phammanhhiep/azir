@@ -22,27 +22,48 @@ def test__parse ():
 
 	docIDs = [0,1]
 
-	b = Indexing ('test')
-	postings = b._parse (tokens, docIDs)
-	vocabulary = b.get_vocabulary ()
-	assert len (vocabulary) == 4
-	assert vocabulary['xx']['df'] == 1
-	assert vocabulary['yy']['df'] == 2
-	assert vocabulary['zz']['df'] == 2
-	assert vocabulary['tt']['df'] == 2
+	try:
+		indexing = Indexing ('test')
+		postings = indexing._parse (tokens, docIDs)
+		vocabulary = indexing.get_vocabulary ()
+		assert len (vocabulary) == 4
+		assert vocabulary['xx']['df'] == 1
+		assert vocabulary['yy']['df'] == 2
+		assert vocabulary['zz']['df'] == 2
+		assert vocabulary['tt']['df'] == 2
 
-	assert len (postings) == 10
-	expected_postings = [
-		[0, 0, 0], [1, 0, 1],[2, 0, 2],[0, 0, 3],[3, 0, 4],
-		[1, 1, 0], [1, 1, 1], [2, 1, 2], [2, 1, 3], [3, 1, 4]
-	]
+		assert len (postings) == 10
+		expected_postings = [
+			[0, 0, 0], [1, 0, 1],[2, 0, 2],[0, 0, 3],[3, 0, 4],
+			[1, 1, 0], [1, 1, 1], [2, 1, 2], [2, 1, 3], [3, 1, 4]
+		]
 
-	for i in range (len (postings)):
-		p = postings[i]
-		exp = expected_postings[i] 
-		assert p[0] == exp[0]
-		assert p[1] == exp[1]
-		assert p[2] == exp[2]
+		for i in range (len (postings)):
+			p = postings[i]
+			exp = expected_postings[i] 
+			assert p[0] == exp[0]
+			assert p[1] == exp[1]
+			assert p[2] == exp[2]
+
+		expected_doc_vectors = [
+			{'docid': 0, 'tf': [(0,2), (1,1), (2,1), (3,1)]},
+			{'docid': 1, 'tf': [(1,2), (2,2), (3,1)]},
+		]	
+		doc_vectors = list (indexing.doc_vector_coll.find ().sort ('docid', 1))	
+
+		assert len (expected_doc_vectors) == len (doc_vectors)
+		for a,b in zip (expected_doc_vectors, doc_vectors):
+			assert a['docid'] == b['docid']
+			assert len (a['tf']) == len (b['tf'])
+			for c,d in zip (a['tf'], b['tf']):
+				for e,f in zip (c,d):
+					assert e == f
+	except Exception as ex:
+		print (ex)
+		indexing.doc_vector_coll.drop ()
+		assert False
+	else:
+		indexing.doc_vector_coll.drop ()	
 
 @pytest.mark.indexingTest
 @pytest.mark.skip

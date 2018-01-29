@@ -8,6 +8,8 @@ def route (app, irsys):
 
 	@app.route ('/api/index', methods=['POST'])
 	def index ():
-		return indexCtrl.index (irsys)	
+		return indexCtrl.index (irsys)
+
+	
 
 

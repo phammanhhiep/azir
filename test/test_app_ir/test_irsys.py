@@ -5,4 +5,6 @@ from app_ir.irsys import IRSYS
 import pytest, pymongo
 from bson.objectid import ObjectId
 
-def test_ (): pass 
+def test_index (): pass
+
+def test_retrieve (): pass 

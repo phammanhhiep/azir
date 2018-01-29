@@ -22,7 +22,7 @@ class Indexing:
 		+ Need to deal with words being deleted from an indexed documents. The current version only deal with document being deleted, new words, an existing word being added or move arround a given document.
 	'''
 
-	def __init__ (self, dbname='market', vocabulary_coll_name='vocabularies', index_coll_name='indexes', doc_coll_name='content', max_update_termid=100, preprocessing=Preprocessing):
+	def __init__ (self, dbname='market', vocabulary_coll_name='vocabularies', index_coll_name='indexes', doc_coll_name='content', doc_vector_coll_name='docvectors', max_update_termid=100, preprocessing=Preprocessing):
 		'''
 		Functionality:
 			+ Create and update indexes
@@ -35,6 +35,7 @@ class Indexing:
 		self.vocabulary_coll = self.db[vocabulary_coll_name]
 		self.index_coll = self.db[index_coll_name]
 		self.doc_coll = self.db[doc_coll_name]
+		self.doc_vector_coll = self.db[doc_vector_coll_name]
 		self.preprocessing = preprocessing
 		self.max_update_termid = max_update_termid
 		self.create_cache ()
@@ -214,7 +215,16 @@ class Indexing:
 			indexes[i['termid']] = i['pl']
 		return indexes
 
-	def _save_parse (self, tokens): pass
+	def get_doc_vectors (self, docids):
+		'''
+		Sort return doc vector by ordering in docids
+		'''
+		docvs = list (self.doc_vector_coll.find ({'docid': {'$in': docids}}))
+		docvs = sorted (docs, key=lambda x: docids.index (x['docid']))
+		return docvs
+
+	def _save_doc_vectors (self, doc_vectors):
+		self.doc_vector_coll.insert_many (doc_vectors)
 
 	def _parse (self, tokens, docIDs):
 		'''
@@ -222,6 +232,8 @@ class Indexing:
 		The lists will be processd by another method to combine them into an index.
 		Besides that, accumulate the vocabulary dictionary.
 		Normally tokens and docIDs should be store as attributes of the object. However, since the IR system does not parse the whole collection, but breake it in piece and process one at a time, the method is called several time to process a collection, and thus the choice of parameters will be more flexible.
+
+		Beside parse, also build document vector, which record termid, term frequency, and docid.
 
 		::param tokens::
 		::type tokens::
@@ -232,12 +244,14 @@ class Indexing:
 		'''
 
 		postings = []
+		doc_vectors = []
 		D = len (tokens)
 		for i in range (D):
 			doc = tokens [i]
 			docid = docIDs[i]
 			S = len (doc)
 			pindex = 0 # position index
+			docv_tf = defaultdict (lambda: 0, {})
 			for j in range (S):
 				sent = doc[j]
 				for term in sent:
@@ -251,7 +265,11 @@ class Indexing:
 						self._updated_term (term)
 					termid = self._vocabulary[term]['termid']
 					postings.append ([termid, docid, pindex])
+					docv_tf[termid] += 1
 					pindex += 1
+			docv_tf = [(k, v) for k,v in docv_tf.items ()]
+			doc_vectors.append ({'docid': docid, 'tf': docv_tf})
+		self._save_doc_vectors (doc_vectors)
 		return postings
 
 	def _index (self, postings):
@@ -423,6 +441,9 @@ class Indexing:
 		::param collection:: a list of [docid, doc states, doc content]. If not being preprocessing, must provide preprocessing when init the object.
 		::param save:: True means to build and save index to disk. Otherwise, just return the index without saving to disk.
 		'''
+		if not collection:
+			return None
+
 		STATE = self.COLLECTION['STATE']
 		DOC = self.COLLECTION['DOC']
 		DOCID = self.COLLECTION['DOCID']		
@@ -441,6 +462,7 @@ class Indexing:
 		self.update_indexes (merged_indexes)
 		self.update_vocabulary ()
 		self.update_index_cache ()
+		return {'status': 1, 'msg': 'OK'}
 		
 class BSBIndexing(Indexing):
 	'''

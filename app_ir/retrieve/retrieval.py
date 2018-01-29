@@ -32,6 +32,8 @@ class Retrieval:
 			'TF': 1, 
 			'POSITIONS': 2,
 		}
+
+		# merged_indexes
 	
 	def _create_cache (self):
 		self._count_docs ()	
@@ -69,6 +71,15 @@ class Retrieval:
 		return indexes
 
 	def _fetch_docs (self, postings_lists): pass
+
+	def fetch_docs (self, docid):
+		'''
+		The return is sorted according to the original docid.
+
+		::return:: a list of list [docid, doc]
+
+		'''
+		return []
 
 	def _match_docids (self, indexes):
 		'''
@@ -192,17 +203,13 @@ class Retrieval:
 		'''
 		Merge standard index with paramatric index if possible.
 		'''
-
-	def _augment_doc_vectors (self, doc_vectors):
+	
+	def _create_scoring_data (self, postings_lists, query_tokens):
 		'''
-		Add additional data for later steps, i.e. scoring and so on.
-		'''	
-		docids = [v[0] for v in doc_vectors]
-		vocabulary = self.indexing.get_vocabulary ()
-		for v in doc_vectors:
-			v.insert (1, self.D)
-			term_tfs = v[2]
-			v[2] = [ [vocabulary[t[0]]['df']] + list (t) for t in term_tfs]
+		::param postings_lists:: Postings lists return by the method _merge_indexes
+		::return:: list of data, each element represent a document, and dependent on the rank object.
+		'''
+		return self.ranking.create_scoring_data (self, postings_lists, query_tokens)
 
 	def _rank (self, docs):
 		'''
@@ -215,9 +222,9 @@ class Retrieval:
 		'''
 		tokens = self.preprocessing.run ([query])[0][0]
 		indexes = self._fetch_indexes (tokens)
-		doc_vectors = self._merge_indexes (indexes)
-		self._augment_doc_vectors (doc_vectors)
-		scores = self.ranking.score (doc_vectors)
+		postings_lists = self._merge_indexes (indexes)
+		scoring_data = self._create_scoring_data (postings_lists, tokens)
+		scores = self.ranking.score (scoring_data)
 		docs = self._fetch_docs (postings_lists)
 		docs = self._rank (docs)
 		return docs
