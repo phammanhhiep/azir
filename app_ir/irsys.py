@@ -1,13 +1,10 @@
-import os,sys
-sys.path.insert (0,os.path.abspath ('./app_ir/'))
-
-from indexing.indexing import Indexing
-from preprocess.preprocess import Preprocessing
-from retrieve.retrieval import Retrieval
-from retrieve.ranking import Ranking
+from app_ir.indexing.indexing import Indexing
+from app_ir.preprocess.preprocess import Preprocessing
+from app_ir.retrieve.retrieval import Retrieval
+from app_ir.retrieve.ranking import CosineScoring
 
 class IRSYS:
-	def __init__ (self, dbname='market', doc_dbname='market', doc_coll_name='contents', vocabulary_coll_name='vocabularies', index_coll_name='indexes', max_queue=100, max_delete_cache=100, max_update_wait_time=300, max_delete_wait_time=300):
+	def __init__ (self, db=None, dbname='market', max_queue=100, max_delete_cache=100, max_update_wait_time=300, max_delete_wait_time=300):
 		'''
 		Set up parameters and index documents from the last queue and cache.
 
@@ -20,13 +17,12 @@ class IRSYS:
 		self.max_delete_cache = max_delete_cache
 		self.max_update_wait_time = max_update_wait_time
 		self.max_delete_wait_time = max_delete_wait_time
-		self.dbname = dbname
-		self.doc_coll_name = doc_coll_name
+		self.db = db
 		self._create_cache ()
-		self._indexing = Indexing (dbname=dbname)
-		self._ranking = Ranking ()
-		self._preprocessing = Preprocessing () 
-		self._retrieval = Retrieval (preprocessing=self._preprocessing, ranking=self._ranking, indexing=self._indexing)
+		self._ranking = CosineScoring ()
+		self._preprocessing = Preprocessing () 		
+		self._indexing = Indexing (db=db, preprocessing=self._preprocessing) 
+		self._retrieval = Retrieval (db=db, preprocessing=self._preprocessing, ranking=self._ranking, indexing=self._indexing)
 		self.index ()
 
 	def _create_cache (self):
@@ -49,42 +45,57 @@ class IRSYS:
 		'''
 		self._queue = []
 
-	def get_queue (self):
+	def _get_queue (self):
 		return self._queue
 
-	def check_queue (self, doc=None):
-		'''
-		Check conditions to process docid in the queues.
-		Filter the queue if the doc has one instance in the queue and update appropriate state. For example, it was created but not being indexed yet, and now it is edited. In another case, it is created but not indexed, but now being deleted. First case will keep the edited version, but now the document is considered as a new document since it has nevered been index. The later require just ignore the document.
-
-		::param doc:: the new doc about being indexed. 
-		::return:: True if ready to add or else False
-		'''
-	def reset_queue (self):
+	def _reset_queue (self):
 		'''
 		Reset queue and its states
 		'''
+		self._create_queue()
 	
-	def docid_queue_add (self):
+	def _queue_add (self, doc):
 		'''
 		Add docid and its state to the queue
 		'''
+		status = False
+		if len (self._queue) < self.max_queue:
+			self._queue.append (doc)
+			status = True
+		return status
 
-	def _fetch_doc_content (self, docs):
+	def _drop_queue (self):
+		'''
+		Delete queue in disk once all docs in queue are processed.
+		'''	
+		self.db.queued_content_coll.drop ()
+
+	def save_queue (self):
+		'''
+		In some situations, a queue needs to be saved like 
+		when the system is down suddently.
+		'''	
+		self.db.queued_content_coll.insert_many (self._queue)
+
+	def _fetch_doc_content (self, docs=None):
 		'''
 		Get document content, add the content to correspind doc object.
-		Sort document in order of created time (or docID which is assumed to be an ObjectId)
 		::param docs:: a dictionary, whose key is a docid, and value is its state 
-		::return:: a list of list each of which has format, [docid, state, content]
+		::return:: a list of list each of which has format, [docid, content, state]
 		'''
 		DOCID = 0
 		STATE = 1
-		foundDocs = None
-		if docs:
-			docids = [d[DOCID] for d in docs]
-			states = [d[STATE] for d in docs]
-			foundDocs = self._retrieval.fetch_docs (docids)
-			[d.append (s) for s,d in zip (states, foundDocs)]
+		F_DOCID = 0
+		F_CONTENT = 1
+		F_STATE = 2
+		if docs is None:
+			raise ValueError ('No documents are provided.')
+
+		docids = [d[DOCID] for d in docs]
+		states = [d[STATE] for d in docs]
+		foundDocs = self._retrieval.fetch_docs (docids)
+		foundDocs = sorted (foundDocs, key=lambda x: docids.index (x[F_DOCID]))
+		[d.append (s) for s,d in zip (states, foundDocs)]
 		return foundDocs
 
 	def index (self, doc=None):
@@ -95,20 +106,22 @@ class IRSYS:
 		'''
 		result = None
 		if doc is None:
-			last_docs = self.get_queue ()
+			last_docs = self._get_queue ()
 			last_collection = self._fetch_doc_content (last_docs)
-			self.reset_queue ()
+			self._reset_queue ()
 			result = self._indexing.index (last_collection)
 		else:
-			if self.check_queue (doc):
-				self.queue_add (doc)
-				result = {'status': 1, 'msg': 'OK'}
+			if self._queue_add (doc):
+				result = True
 			else:
 				last_docs = self._get_queue ()
-				last_collection = self._get_doc_content (last_docs)
+				last_collection = self._fetch_doc_content (last_docs)
 				result = self._indexing.index (last_collection)
-				self.reset_queue ()
-				self.queue_add (doc)				
+				self._reset_queue ()
+				if not self._queue_add (doc):
+					raise ValueError ('Cannot add a document to queue.')
+		if result is True:
+			self._drop_queue ()		
 		return result
 
 	def retrieve (self, query):

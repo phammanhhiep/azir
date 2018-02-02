@@ -1,28 +1,24 @@
 '''
 Index construction.
 '''
-
-import os,sys
-sys.path.insert (0, os.path.abspath ('./'))
-from app_ir.preprocess.preprocess import Preprocessing
-from app_ir.compress.compression import Compression
-# from app_ir.preprocess.stem import Stem
-# from app_ir.preprocess.word_tokenize import WordTokenize
-# from app_ir.preprocess.sent_tokenize import SentTokenize
-# from app_ir.preprocess.spell_correct import SpellCorrection
-
 from collections import defaultdict
 import pymongo
 
 class Indexing:
 	'''
-	There are two way to represent an index, i.e. a list of list or a dictionary whose key is termid and value is the postings lists. Both are used and sometimes interact with each other. The choice depends on the purpose of an index. With cach indexes, most of the time, they are used for lookup only, store in dictionary helps speed up the performance. Other indexes like thosed result from _parse method, are of type list. They save space, and only used for the time of indexing.
+	There are 3 way to represent indexes:
+		a list of list [termid, [[], [], ...]]
+		a dictionary {termid: [[], [], ...], ...}
+		a list of dictionaries: [{termid: xxxx, pl: [[], ...]}, ...]
+	First two are used in main memory and sometimes interact with each other. The choice depends on the purpose of an index. With cach indexes, most of the time, they are used for lookup only, store in dictionary helps speed up the performance. Other indexes like thosed result from _parse method, are of type list. They save space, and only used for the time of indexing.
+	The last representation is used to store in disk.
+	
 	FUTURE WORK:
 		+ Reconsider the index structures. Both structures being used may confusing sometimes.
 		+ Need to deal with words being deleted from an indexed documents. The current version only deal with document being deleted, new words, an existing word being added or move arround a given document.
 	'''
 
-	def __init__ (self, dbname='market', vocabulary_coll_name='vocabularies', index_coll_name='indexes', doc_coll_name='content', doc_vector_coll_name='docvectors', max_update_termid=100, preprocessing=Preprocessing):
+	def __init__ (self, db=None, preprocessing=None, max_update_termid=100):
 		'''
 		Functionality:
 			+ Create and update indexes
@@ -31,11 +27,10 @@ class Indexing:
 		::param index:: possibly not the whole index in the system, but only part of it, being cached for efficiency retrieval. If provided, help create new index or update index more efficiently.
 		::param vocabulary:: cached by system and provided to help create new index or update index more efficiently. 
 		''' 
-		self.db = pymongo.MongoClient ()[dbname]
-		self.vocabulary_coll = self.db[vocabulary_coll_name]
-		self.index_coll = self.db[index_coll_name]
-		self.doc_coll = self.db[doc_coll_name]
-		self.doc_vector_coll = self.db[doc_vector_coll_name]
+		self.db = db
+		self._vocabulary_coll = self.db.vocabulary_coll
+		self._index_coll = self.db.index_coll
+		self._doc_vector_coll = self.db.contentvectors_coll
 		self.preprocessing = preprocessing
 		self.max_update_termid = max_update_termid
 		self.create_cache ()
@@ -75,7 +70,7 @@ class Indexing:
 		'''
 		self._create_vocabulary_cache ()
 		self._create_index_cache ()
-		self._reset_term_queues ()
+		self._reset_termid_queues ()
 
 	def update_index_cache (self):
 		'''
@@ -89,31 +84,39 @@ class Indexing:
 		By default, fetch and load all of vocabulary into main memory. 
 		'''
 		self._vocabulary = defaultdict (lambda: {'termid': None, 'df': 0, 'docid': None}, {})
-		vocabulary = self.vocabulary_coll.find ()
+		vocabulary = self._vocabulary_coll.find ()
 		for v in vocabulary:
 			self._vocabulary[v['term']] = {'termid': v['termid'], 'df': v['df'], 'docid': None}
 
 	def _create_index_cache (self):
 		'''
-		Fetch most frequently used part of index from disk.
+		Fetch most frequently used part of index from disk. << NEED TO IMPLEMENT >>
 		'''
 		self._indexes = defaultdict (lambda: None, {})	
 
-	def _to_list_indexes (self, index):
+	def _to_list_memory_indexes (self, indexes):
 		'''
-		Convert from list of dictionaries to list of lists.
-		Convert from a form being used in disk to form being used in application.
+		Convert from disk indexes to memory indexes in form of a list of lists.
 		'''	
-		return [[t, pl] for t,pl in index.items ()]
+		return [[i['termid'], i['pl']] for i in indexes]
 
-	def _to_disk_indexes (self, index):
+	def _to_dict_memory_indexes (self, indexes):
+		'''
+		::param indexes:: could be a cursor or a list of disk indexes
+		'''
+
+		indexes = {i['termid']:i['pl'] for i in indexes}
+		indexes = defaultdict (lambda: None, indexes)
+		return indexes
+
+	def _to_disk_indexes (self, indexes):
 		'''
 		Convert from list of list to list of dictionaries. 
-		Used to convert an index to proper form before save to disk.
+		Used to convert indexes to proper form before save to disk.
 		'''	
 		TERMID = self.INDEX_LIST['TERMID']
 		POSTINGLIST = self.INDEX_LIST['POSTINGLIST']
-		return [{'termid': i[TERMID], 'pl': i[POSTINGLIST]} for i in index]
+		return [{'termid': i[TERMID], 'pl': i[POSTINGLIST]} for i in indexes]
 
 	def get_indexes (self):
 		'''
@@ -122,6 +125,9 @@ class Indexing:
 		return self._indexes	
 
 	def get_vocabulary (self):
+		'''
+		Get the cached vocabulary
+		'''
 		return self._vocabulary
 
 	def save_vocabulary (self):
@@ -131,45 +137,46 @@ class Indexing:
 		'''
 		if self._vocabulary is not None:
 			vocabulary = [{'term': k, 'termid': v['termid'], 'df': v['df']} for k,v in self._vocabulary.items ()]
-			self.vocabulary_coll.insert_many (vocabulary)
+			self._vocabulary_coll.insert_many (vocabulary)
 
 	def update_vocabulary (self):
 		'''
 		Update the document frequency of term
 		'''
 		if self._vocabulary is not None:
-			new_terms = self._get_new_terms ()
-			updated_terms = self._get_updated_terms ()
-			if len (new_terms) > 0:
-				vocabulary = [{'term': t, 'termid': v['termid'], 'df': v['df']} for t,v in self._vocabulary.items () if t in new_terms]
-				self.vocabulary_coll.insert_many (vocabulary)
-			if len (updated_terms) > 0:
+			new_termids = self._get_new_termids ()
+			updated_termids = self._get_updated_termids ()
+			if len (new_termids) > 0:
+				vocabulary = [{'term': t, 'termid': v['termid'], 'df': v['df']} for t,v in self._vocabulary.items () if t in new_termids]
+				self._vocabulary_coll.insert_many (vocabulary)
+			if len (updated_termids) > 0:
+
 				for k,v in self._vocabulary.items ():
-					if k in updated_terms:
-						self.vocabulary_coll.update_one ({'termid': v['termid']}, {'$set': {'df': v['df']}})
-			self._reset_term_queues ()
+					if k in updated_termids:
+						self._vocabulary_coll.update_one ({'termid': v['termid']}, {'$set': {'df': v['df']}})
+			self._reset_termid_queues ()
 
-	def _new_term (self, term):
+	def _new_termid (self, termid):
 		'''
-		Store new terms discovered. For example when _parse is called.
+		Store a new termid discovered. For example when _parse is called.
 		'''
-		self._new_terms_queue.append (term) 
+		self._new_termid_queue.append (termid) 
 
-	def _updated_term (self, term):
+	def _updated_termid (self, termid):
 		'''
-		Store updated terms in vocabulary. For example, when _parse is called, some terms have df increaseing.
+		Store updated termid in vocabulary. For example, when _parse is called, some termid have df increaseing.
 		'''
-		if term not in self._new_terms_queue and term not in self._updated_term_queue:
-			self._updated_term_queue.append (term)
+		if termid not in self._new_termid_queue and termid not in self._updated_term_queue:
+			self._updated_term_queue.append (termid)
 
-	def _get_new_terms (self):
-		return self._new_terms_queue
+	def _get_new_termids (self):
+		return self._new_termid_queue
 	
-	def _get_updated_terms (self):
+	def _get_updated_termids (self):
 		return self._updated_term_queue
 
-	def _reset_term_queues (self): 
-		self._new_terms_queue = []
+	def _reset_termid_queues (self): 
+		self._new_termid_queue = []
 		self._updated_term_queue = []
 
 	def save_indexes (self, index=None, index_coll_name=None):
@@ -178,60 +185,56 @@ class Indexing:
 		'''	
 		if index is None:
 			raise ValueError ('Index or collection name must be provided.')
-		if index_coll_name is not None:
-			index_coll = self.db[index_coll_name]
-		else:
-			index_coll = self.index_coll
 		index = self._to_disk_indexes (index)
-		index_coll.insert_many (index)
+		self._index_coll.insert_many (index)
 
-	def update_indexes (self, index=None, index_coll_name=None):
+	def update_indexes (self, indexes=None):
 		'''
-		Update postings lists of indexes in disk.
+		Update postings lists of indexes in disk. Possibly, insert if not found termid.
 		'''
 		TERMID = self.INDEX_LIST['TERMID']
 		PL = self.INDEX_LIST['POSTINGLIST']
-		if index is None:
+		
+		if indexes is None:
 			raise ValueError ('Index must be provided.')
-		if index_coll_name is not None:
-			index_coll = self.db[index_coll_name]
-		else:
-			index_coll = self.index_coll
-		for i in index:
-			termid = i[TERMID]
-			pl = i[PL]
-			index_coll.update_one ({'termid': termid}, {'$set': {'termid': termid, 'pl': pl}}, upsert=True)
+
+		termids = [i[TERMID] for i in indexes]
+		updates = self._to_disk_indexes (indexes)
+		self._index_coll.update_many (termids, updates)
 
 	def fetch_indexes (self, termids=None):
 		'''
 		Fetch indexes from disk using their termids.
 		::param termids:: a list of term IDs
+		::return:: disk indexes.
 		'''
 		if termids is None:
 			raise ValueError ('termid must be provided') 
-		result = self.index_coll.find ({'termid': {'$in': termids}})
-		indexes = defaultdict (lambda: None, {})
-		for i in result:
-			indexes[i['termid']] = i['pl']
-		return indexes
+		result = self._index_coll.find_many (termids)
+		return result
 
 	def get_doc_vectors (self, docids):
 		'''
-		Sort return doc vector by ordering in docids
+		Return the cursor of doc vectors.
 		'''
-		docvs = list (self.doc_vector_coll.find ({'docid': {'$in': docids}}))
-		docvs = sorted (docs, key=lambda x: docids.index (x['docid']))
+		docvs = self._doc_vector_coll.find_many (docids)
 		return docvs
 
 	def _save_doc_vectors (self, doc_vectors):
-		self.doc_vector_coll.insert_many (doc_vectors)
+		self._doc_vector_coll.insert_many (doc_vectors)
+
+	def _update_doc_vectors (self, doc_vectors):
+		'''
+		Updated current doc vector. Possibly, insert if it is a new document.
+		'''
+		self._doc_vector_coll.update_many (doc_vectors)
 
 	def _parse (self, tokens, docIDs):
 		'''
 		The return is a list of lists of a combination of termid, docid, and position index.
 		The lists will be processd by another method to combine them into an index.
 		Besides that, accumulate the vocabulary dictionary.
-		Normally tokens and docIDs should be store as attributes of the object. However, since the IR system does not parse the whole collection, but breake it in piece and process one at a time, the method is called several time to process a collection, and thus the choice of parameters will be more flexible.
+		<< NOT FIND the explanation make sense >> Normally tokens and docIDs should be store as attributes of the object. However, since the IR system does not parse the whole collection, but breake it in piece depending on the document status and process one group of collections at a time, the method is called several time to process a collection, and thus the choice of parameters will be more flexible.
 
 		Beside parse, also build document vector, which record termid, term frequency, and docid.
 
@@ -256,20 +259,22 @@ class Indexing:
 				sent = doc[j]
 				for term in sent:
 					V = len (self._vocabulary)
-					if self._vocabulary[term]['termid'] is None:
+					if self._vocabulary[term]['termid'] is None: # new term
 						self._vocabulary[term]['termid'] = V
-						self._new_term (term)
-					if self._vocabulary[term]['docid'] != docid:
+						self._vocabulary[term]['docid'] = docid
+						self._vocabulary[term]['df'] += 1
+						self._new_termid (V)
+					if self._vocabulary[term]['docid'] != docid: # not new term
 						self._vocabulary[term]['df'] += 1
 						self._vocabulary[term]['docid'] = docid
-						self._updated_term (term)
+						self._updated_termid (self._vocabulary[term]['termid'])
 					termid = self._vocabulary[term]['termid']
 					postings.append ([termid, docid, pindex])
 					docv_tf[termid] += 1
 					pindex += 1
 			docv_tf = [(k, v) for k,v in docv_tf.items ()]
 			doc_vectors.append ({'docid': docid, 'tf': docv_tf})
-		self._save_doc_vectors (doc_vectors)
+		self._update_doc_vectors (doc_vectors)
 		return postings
 
 	def _index (self, postings):
@@ -278,11 +283,14 @@ class Indexing:
 		Sort the postings to make sure indexes of the same terms are placed next to each other. Doing so make it easier to create the indexes.
 		For each term, combine position of the same term together to for the index of the term.
 		FUTURE WORK: 
-			- Keep the positions as a dictionary too, whose keys are the docID. It helps to speed up the lookup, though it will take more space than using list.
+			- Keep the positions as a dictionary too, whose keys are the docID. 
+			It helps to speed up the lookup, though it will take more space than using list.
 	
-		Two term `position` and `posting` are called interchargeably. Both refer to the list [docid, tf, position1, position2, ...]		
+		Two term `position` and `posting` are called interchargeably. Both refer 
+		to the list [docid, tf, position1, position2, ...]		
 		::param postings:: list of postings which obtained from the method _parse
-		::return:: an index
+		::return:: indexes whose format is 
+			[[termid, [[docid, tf, position1, position2, ...], ....]], ...]
 		'''
 
 		P_TERMID = self.POSTING['TERMID']
@@ -406,6 +414,7 @@ class Indexing:
 		# merge edited_indexes with disk_indexes
 		unmerged_termids = [ti[TERMID] for ti in unmerged_edited_indexes]
 		disk_indexes = self.fetch_indexes (unmerged_termids)
+		disk_indexes = self._to_dict_memory_indexes (disk_indexes)
 		if len (disk_indexes) > 0: # merge with disk indexes
 			for ti in unmerged_edited_indexes:
 				termid = ti[TERMID]
@@ -432,7 +441,7 @@ class Indexing:
 		edited_indexes.extend (new_termid_indexes)
 		return edited_indexes
 
-	def index (self, collection, save=True):
+	def index (self, collection=None, save=True):
 		'''
 		Most external use of the class is carried through the method. 
 		Create or update indexes.
@@ -462,7 +471,7 @@ class Indexing:
 		self.update_indexes (merged_indexes)
 		self.update_vocabulary ()
 		self.update_index_cache ()
-		return {'status': 1, 'msg': 'OK'}
+		return True
 		
 class BSBIndexing(Indexing):
 	'''
@@ -477,7 +486,7 @@ class BSBIndexing(Indexing):
 	def __init__ (self, dbname='market', vocabulary_coll_name='vocabularies', index_coll_name='indexes', max_update_termid=100):
 		Indexing.__init__ (self, dbname, vocabulary_coll_name, index_coll_name, max_update_termid)
 		self.temp_index_coll_template = 'temp_bsb_indexes{}'
-		self.index_coll = self.db['bsb_indexes']
+		self._index_coll = self.db['bsb_indexes']
 
 	def _insert_block (self, index, blockid):
 		'''
@@ -488,9 +497,9 @@ class BSBIndexing(Indexing):
 		TERMID = 0
 		PL = 1	
 		index_coll_name = self.temp_index_coll_template.format (blockid)
-		index_coll = self.db[index_coll_name]
+		_index_coll = self.db[index_coll_name]
 		inserted_index = [{'termid': i[TERMID], 'pl': i[PL:]} for i in index]
-		index_coll.insert_many (inserted_index)		
+		_index_coll.insert_many (inserted_index)		
 
 	def _get_block (self, blockname):
 		'''

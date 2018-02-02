@@ -1,6 +1,3 @@
-import os,sys
-sys.path.insert (0, os.path.abspath ('./'))
-import pymongo
 from collections import defaultdict
 
 class Retrieval:
@@ -15,14 +12,14 @@ class Retrieval:
 	::param preprocessing:: an instance of class Preprocessing
 	'''
 
-	def __init__ (self, dbname='market', doc_coll_name='content', ranking=None, preprocessing=None, indexing=None):
-		if None in [ranking, preprocessing, indexing]:
+	def __init__ (self, db=None, ranking=None, preprocessing=None, indexing=None):
+		if None in [db, ranking, preprocessing, indexing]:
 			raise ValueError ('Must provide ranking, preprocessing, and indexing')
-		self.db = pymongo.MongoClient ()[dbname]
-		self.doc_coll = self.db[doc_coll_name]
+		self.db = db
+		self._content_coll = self.db.content_coll
+		self.ranking = ranking
 		self.preprocessing = preprocessing
 		self.indexing = indexing
-		self.ranking = ranking
 		self._create_cache ()
 		self._setup_contants ()
 
@@ -39,7 +36,7 @@ class Retrieval:
 		self._count_docs ()	
 
 	def _count_docs (self):
-		self.D = self.doc_coll.find ().count ()
+		self.D = self._content_coll.find_many ().count ()
 
 	def _fetch_indexes (self, tokens):
 		'''
@@ -63,23 +60,22 @@ class Retrieval:
 		else:
 			fetched_termids = termids
 		
-		disk_indexes = self.indexing.fetch_indexes (fetched_termids)
-		for termid, pl in disk_indexes.items ():
-			indexes.append ({'termid':termid, 'pl':pl})
-		
+		disk_indexes = list (self.indexing.fetch_indexes (fetched_termids))
+		indexes += disk_indexes
 		indexes = sorted (indexes, key=lambda x: len (x['pl']))
 		return indexes
 
 	def _fetch_docs (self, postings_lists): pass
 
-	def fetch_docs (self, docid):
+	def fetch_docs (self, docids):
 		'''
-		The return is sorted according to the original docid.
-
+		::param docids:: 
 		::return:: a list of list [docid, doc]
 
 		'''
-		return []
+		docs = self._content_coll.find_many (docids)
+		results = [[d['_id'], d['content']] for d in docs]
+		return results
 
 	def _match_docids (self, indexes):
 		'''
@@ -155,7 +151,7 @@ class Retrieval:
 		::return:: postings lists for each valid document, whose structure as following,
 		[[docid, [(termid, tf), (termid, tf), ...], [position, ...]], ...]
 		'''	
-		
+
 		DOCID = self.POSTINGS_LIST['DOCID']
 		POSITIONS = self.POSTINGS_LIST['POSITIONS']
 		TF = self.POSTINGS_LIST['TF']
@@ -197,7 +193,9 @@ class Retrieval:
 					matched_positions = sorted (matched_positions)
 					term_tfs = sorted (term_tfs, key=lambda x: x[0]) # sorted by term. For testing.
 					results.append ([docid, term_tfs, matched_positions])
-		return results
+		
+		docids = [d[0] for d in results]
+		return results, docids
 	
 	def _merge_parametric_indexes (self):
 		'''
@@ -211,21 +209,32 @@ class Retrieval:
 		'''
 		return self.ranking.create_scoring_data (self, postings_lists, query_tokens)
 
-	def _rank (self, docs):
+	def _rank (self, docs=None, scores=None):
 		'''
-		Need to implement this one first. Possibly need to fix the merge to include more information to rank the document being returned.
+		Need to implement this one first. Possibly need to fix the merge to 
+		include more information to rank the document being returned.
 		'''
+		results = []
+		if docs is None or scores is None or len (docs) == 0 or len (scores) == 0:
+			pass
+		else:
+			S_DOCID = self.ranking.SCORE_LISTS['DOCID']
+			D_DOCID = 0
+			docids = [d[S_DOCID] for d in scores]
+			results = sorted (docs, key=lambda x: docids.index (x[D_DOCID]))
+		return results
 
 	def retrieve (self, query):
 		'''
 		The interface to combine all other method to retrieve the final results
+		::param query:: a string of terms
+		::return:: 
 		'''
-		tokens = self.preprocessing.run ([query])[0][0]
+		tokens = self.preprocessing.run (query)[0]
 		indexes = self._fetch_indexes (tokens)
-		postings_lists = self._merge_indexes (indexes)
+		postings_lists, docids = self._merge_indexes (indexes)
 		scoring_data = self._create_scoring_data (postings_lists, tokens)
 		scores = self.ranking.score (scoring_data)
-		docs = self._fetch_docs (postings_lists)
-		docs = self._rank (docs)
-		return docs
-
+		docs = self.fetch_docs (docids)
+		ranked_docs = self._rank (docs, scores)
+		return ranked_docs

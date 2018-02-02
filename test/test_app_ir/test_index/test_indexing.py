@@ -1,14 +1,24 @@
 import os, sys
 sys.path.insert (0, os.path.abspath ('./'))
-from app_ir.indexing.indexing import Indexing, BSBIndexing, SPIMIndexing
+from app_ir.indexing.indexing import Indexing
+from app_ir.preprocess.preprocess import Preprocessing
+from app_api.db.db import MongoDB
 
 import pytest, pymongo
 from collections import defaultdict
 from bson.objectid import ObjectId
 
+db = MongoDB ('test')
+
+##### TEST Indexing #####
+
 @pytest.mark.indexingTest
 @pytest.mark.skip
 def test__parse ():
+	'''
+	Test: No vocabulary existing before.
+	Test: No document vector before.
+	'''
 	tokens = [
 		[
 			['xx', 'yy', 'zz'],
@@ -21,35 +31,40 @@ def test__parse ():
 	]
 
 	docIDs = [0,1]
+	indexing = Indexing (db=db)
 
 	try:
-		indexing = Indexing ('test')
 		postings = indexing._parse (tokens, docIDs)
 		vocabulary = indexing.get_vocabulary ()
-		assert len (vocabulary) == 4
-		assert vocabulary['xx']['df'] == 1
-		assert vocabulary['yy']['df'] == 2
-		assert vocabulary['zz']['df'] == 2
-		assert vocabulary['tt']['df'] == 2
 
-		assert len (postings) == 10
+		exp_vocabulary = {
+			'xx':  {'termid': 0, 'df': 1},
+			'yy': {'termid': 1, 'df': 2},
+			'zz': {'termid': 2, 'df': 2},
+			'tt': {'termid': 3, 'df': 2},
+		}
+
+		assert len (exp_vocabulary) == len (vocabulary)
+		for k,v in exp_vocabulary.items ():
+			assert vocabulary[k]['termid'] == v['termid']
+			assert vocabulary[k]['df'] == v['df']
+
 		expected_postings = [
 			[0, 0, 0], [1, 0, 1],[2, 0, 2],[0, 0, 3],[3, 0, 4],
 			[1, 1, 0], [1, 1, 1], [2, 1, 2], [2, 1, 3], [3, 1, 4]
 		]
 
-		for i in range (len (postings)):
-			p = postings[i]
-			exp = expected_postings[i] 
-			assert p[0] == exp[0]
-			assert p[1] == exp[1]
-			assert p[2] == exp[2]
+		assert len (postings) == len (expected_postings)
+		for a,b in zip (postings, expected_postings):
+			assert len (a) == len (b)
+			for c,d in zip (a, b):
+				assert c == d
 
 		expected_doc_vectors = [
 			{'docid': 0, 'tf': [(0,2), (1,1), (2,1), (3,1)]},
 			{'docid': 1, 'tf': [(1,2), (2,2), (3,1)]},
 		]	
-		doc_vectors = list (indexing.doc_vector_coll.find ().sort ('docid', 1))	
+		doc_vectors = list (indexing._doc_vector_coll._coll.find ().sort ('docid', 1))	
 
 		assert len (expected_doc_vectors) == len (doc_vectors)
 		for a,b in zip (expected_doc_vectors, doc_vectors):
@@ -60,10 +75,102 @@ def test__parse ():
 					assert e == f
 	except Exception as ex:
 		print (ex)
-		indexing.doc_vector_coll.drop ()
+		indexing._doc_vector_coll.drop ()
 		assert False
 	else:
-		indexing.doc_vector_coll.drop ()	
+		indexing._doc_vector_coll.drop ()	
+
+@pytest.mark.indexingTest
+@pytest.mark.skip
+def test__parse2 ():
+	'''
+	Test:  Vocabulary exists before.
+	Test:  document vectors exists before.
+	'''
+
+	prev_vocabulary = [		
+		{'term': 'xx', 'termid': 0, 'df': 1},
+		{'term': 'yy', 'termid': 1, 'df': 2},
+		{'term': 'zz', 'termid': 2, 'df': 2},
+		{'term': 'tt', 'termid': 3, 'df': 2},
+		{'term': 'nn', 'termid': 4, 'df': 1},
+		{'term': 'mm', 'termid': 5, 'df': 1}
+	]
+
+	prev_doc_vectors = [
+		{'docid': 0, 'tf': [(0,1), (1,1), (2,3), (3,1)]},
+		{'docid': 1, 'tf': [(2,2), (3,2), (4,1)]},
+	]
+
+	tokens = [
+		[
+			['xx', 'yy', 'zz'],
+			['xx', 'tt']
+		],
+		[
+			['yy', 'yy', 'zz'],
+			['zz', 'tt', 'kk']
+		],	
+	]
+
+	docIDs = [0,2]
+	db.vocabulary_coll.insert_many (prev_vocabulary)
+	db.contentvectors_coll.insert_many (prev_doc_vectors)
+	indexing = Indexing (db=db)
+
+	try:
+		postings = indexing._parse (tokens, docIDs)
+		vocabulary = indexing.get_vocabulary ()
+
+		exp_vocabulary = {
+			'xx':  {'termid': 0, 'df': 2},
+			'yy': {'termid': 1, 'df': 4},
+			'zz': {'termid': 2, 'df': 4},
+			'tt': {'termid': 3, 'df': 4},
+			'nn': {'termid': 4, 'df': 1},
+			'mm': {'termid': 5, 'df': 1},
+			'kk': {'termid': 6, 'df': 1},
+		}
+
+		assert len (exp_vocabulary) == len (vocabulary)
+		for k,v in exp_vocabulary.items ():
+			assert vocabulary[k]['termid'] == v['termid']
+			assert vocabulary[k]['df'] == v['df']
+
+		expected_postings = [
+			[0, 0, 0], [1, 0, 1],[2, 0, 2],[0, 0, 3],[3, 0, 4],
+			[1, 2, 0], [1, 2, 1], [2, 2, 2], [2, 2, 3], [3, 2, 4], [6,2,5]
+		]
+
+		assert len (postings) == len (expected_postings)
+		for a,b in zip (postings, expected_postings):
+			assert len (a) == len (b)
+			for c,d in zip (a, b):
+				assert c == d
+
+		expected_doc_vectors = [
+			{'docid': 0, 'tf': [(0,2), (1,1), (2,1), (3,1)]},
+			{'docid': 1, 'tf': [(2,2), (3,2), (4,1)]},
+			{'docid': 2, 'tf': [(1,2), (2,2), (3,1), (6,1)]},
+		]
+
+		doc_vectors = list (indexing._doc_vector_coll._coll.find ().sort ('docid', 1))	
+
+		assert len (expected_doc_vectors) == len (doc_vectors)
+		for a,b in zip (expected_doc_vectors, doc_vectors):
+			assert a['docid'] == b['docid']
+			assert len (a['tf']) == len (b['tf'])
+			for c,d in zip (a['tf'], b['tf']):
+				for e,f in zip (c,d):
+					assert e == f
+	except Exception as ex:
+		print (ex)
+		indexing._doc_vector_coll.drop ()
+		indexing._vocabulary_coll.drop ()
+		assert False
+	else:
+		indexing._doc_vector_coll.drop ()
+		indexing._vocabulary_coll.drop ()
 
 @pytest.mark.indexingTest
 @pytest.mark.skip
@@ -72,7 +179,7 @@ def test__index ():
 		[0, 0, 0], [1, 0, 1], [2, 0, 2], [0, 0, 3], [3, 0, 4], 
 		[1, 1, 0], [1, 1, 1], [2, 1, 2], [2, 1, 3], [3, 1, 4]]
 
-	b = Indexing ('test')
+	b = Indexing (db=db)
 	index = b._index (postings)
 	expected_index = [
 		[0, [[0, 2, 0, 3]]], [1, [[0, 1, 1], [1, 2, 0, 1]]],
@@ -99,11 +206,11 @@ def test__update_indexes ():
 		[3, [[0,1,4], [1,1,4]]]
 	]
 
-	b = Indexing ('test')
+	b = Indexing (db=db)
 	try:
 		b.update_indexes (index)
 		fetched_index = b.fetch_indexes ([0,1,2,3])
-		fetched_index = b._to_list_indexes (fetched_index)
+		fetched_index = b._to_list_memory_indexes (fetched_index)
 		assert len (fetched_index) == len (index)
 		for j in range (4):
 			i = fetched_index[j]
@@ -117,10 +224,10 @@ def test__update_indexes ():
 
 	except Exception as ex:
 		print (ex)
-		b.index_coll.drop ()
+		b._index_coll.drop ()
 		assert False
 	else:
-		b.index_coll.drop ()
+		b._index_coll.drop ()
 
 @pytest.mark.indexingTest
 @pytest.mark.skip
@@ -130,7 +237,7 @@ def test__index_new_docs ():
 		[1, [['yy', 'yy', 'zz'],['zz', 'tt']]],	
 	]
 
-	b = Indexing ('test')
+	b = Indexing (db=db)
 	index = b._index_new_docs (collection)
 
 	expected_index = [
@@ -154,7 +261,7 @@ def test__left_join_postings_lists ():
 	# test if 
 	pl = [[0, 1, 1], [3, 2, 0, 1]]
 	target_pl = [[0,2,4,5], [2,1,10]]
-	b = Indexing ('test')
+	b = Indexing (db=db)
 	pl = b._left_join_postings_lists (pl, target_pl)
 	expected_pl = [[0, 1, 1], [2,1,10], [3, 2, 0, 1]]
 
@@ -209,7 +316,7 @@ def test__merge_indexes ():
 		[10, [[10,1,5], [13,1,5]]]
 	]
 
-	b = Indexing ('test')
+	b = Indexing (db=db)
 	b.save_indexes (disk_indexes)
 	b._indexes = cache_indexes
 
@@ -228,17 +335,18 @@ def test__merge_indexes ():
 
 	except Exception as ex:
 		print (ex)
-		b.index_coll.drop ()
+		b._index_coll.drop ()
 		assert False
 	else:
-		b.index_coll.drop ()	
+		b._index_coll.drop ()	
 
 @pytest.mark.indexingTest
 @pytest.mark.skip
 def test_index ():
+
 	collection = [
-		[0, [['xx', 'yy', 'zz'],['xx', 'tt']], 1],
-		[10, [['yy', 'yy', 'zz'],['zz', 'tt', 'kk']], 0],	
+		[0, 'xx yy zz. xx tt.', 1],
+		[10, 'yy yy zz. zz tt kk.', 0],	
 	]
 
 	vocabulary = [		
@@ -285,8 +393,9 @@ def test_index ():
 		'kk': {'termid': 6, 'df': 1},
 	}
 
-	b = Indexing ('test')
-	b.vocabulary_coll.insert_many (vocabulary)
+	preprocessing = Preprocessing ()
+	b = Indexing (db=db, preprocessing=preprocessing)
+	b._vocabulary_coll.insert_many (vocabulary)
 	b._create_vocabulary_cache ()
 	b.save_indexes (disk_indexes)
 	b._indexes = cache_indexes
@@ -294,14 +403,17 @@ def test_index ():
 	try:
 		b.index (collection)
 		_vocabulary = b.get_vocabulary ()
+
+		# test vocabulary
 		assert len (_vocabulary) == len (exp_vocabulary)
 		for k,v in _vocabulary.items ():
 			assert v['termid'] == exp_vocabulary[k]['termid']
 			assert v['df'] == exp_vocabulary[k]['df']
 
 		fetched_index = b.fetch_indexes ([0,1,2,3,4,5,6])
-		fetched_index = b._to_list_indexes (fetched_index)
+		fetched_index = b._to_list_memory_indexes (fetched_index)
 
+		# test indexes
 		assert len (fetched_index) == len (expected_index)
 		for j in range (len (fetched_index)):
 			i = fetched_index[j]
@@ -313,22 +425,28 @@ def test_index ():
 				for m in range (len (k)):
 					assert k[m] == t[m]
 
+		# test document vectors
+
 	except Exception as ex:
 		print (ex)
-		b.vocabulary_coll.drop ()
-		b.index_coll.drop ()
+		b._vocabulary_coll.drop ()
+		b._index_coll.drop ()
+		b._doc_vector_coll.drop ()
 		assert False
 	else:
-		b.vocabulary_coll.drop ()
-		b.index_coll.drop ()		
+		b._vocabulary_coll.drop ()
+		b._index_coll.drop ()
+		b._doc_vector_coll.drop ()		
+
+##### TEST BSBIndexing #####
 
 @pytest.mark.bsbindexingTest
 @pytest.mark.skip
-def test__insert_block (): pass
+def test_bsbi_insert_block (): pass
 
 @pytest.mark.bsbindexingTest
 @pytest.mark.skip
-def test__merge_blocks ():
+def test_bsbi_merge_blocks ():
 	index0 = [
 		{'termid': 0, 'pl': [[0,1,0]]},
 		{'termid': 1, 'pl': [[0,1,1], [1,1,5]]},

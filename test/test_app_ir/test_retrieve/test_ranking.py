@@ -1,6 +1,6 @@
 import os, sys
 sys.path.insert (0, os.path.abspath ('./'))
-from app_ir.retrieve.ranking import Ranking, WeightedZoneScoring, TermFrequencyScoring, TFIDFScoring, CosineScoring
+from app_ir.retrieve.ranking import WeightedZoneScoring, TermFrequencyScoring, TFIDFScoring, CosineScoring
 import math
 from collections import defaultdict
 import pytest
@@ -132,7 +132,7 @@ def test_cosine_docv_len ():
 	assert dl == expected
 
 @pytest.mark.cosineScoringTesting
-@pytest.mark.skip
+# @pytest.mark.skip
 def test_cosine_create_scoring_data ():
 	'''
 	Assume docv_len is calculated correctly, and thus not being tested.
@@ -155,11 +155,11 @@ def test_cosine_create_scoring_data ():
 		def get_vocabulary (self):
 			return self._vocabulary
 
-		def get_doc_vector (self, docid):
+		def get_doc_vectors (self, docid):
 			return	[
-				{'docid': 0, 'tf': [('xx', 1), ('yy', 3), ('zz', 5), ('tt', 2)]},
-				{'docid': 1, 'tf': [('xx', 10), ('yy', 1), ('zz', 2), ('tt', 4)]},
-				{'docid': 2, 'tf': [('xx', 1), ('yy', 1), ('zz', 1), ('tt', 3)]},
+				{'docid': 0, 'tf': [(0, 1), (4, 3), (100, 5), (101, 2)]},
+				{'docid': 1, 'tf': [(0, 10), (4, 1), (100, 2), (101, 4)]},
+				{'docid': 2, 'tf': [(0, 1), (4, 1), (100, 1), (101, 3)]},
 			]
 
 	class Retrieval:
