@@ -3,7 +3,6 @@ from app_api.db.indexes import IndexModel
 from app_api.db.vocabularies import VocabularyModel
 from app_api.db.content_vectors import ContentVectorModel
 from app_api.db.queued_contents import QueuedConentModel
-from app_api.db.crawled_contents import CrawledContentModel
 
 import pymongo
 
@@ -15,4 +14,3 @@ class MongoDB:
 		self.vocabulary_coll = VocabularyModel (self.db)
 		self.contentvectors_coll = ContentVectorModel (self.db) # << later change to content_vector_coll >>
 		self.queued_content_coll = QueuedConentModel (self.db)
-		self.crawled_content_coll = CrawledContentModel (self.db)
